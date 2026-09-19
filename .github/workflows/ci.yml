@@ -1,0 +1,33 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# One run per ref; a new push cancels the superseded one.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      # No --all-extras: CI skips heavy ML deps. No LLM calls, no evals, ever (CLAUDE.md rule 7).
+      - name: Install
+        run: uv sync
+      - name: Lint
+        run: uv run ruff check . && uv run ruff format --check .
+      - name: Types
+        run: uv run mypy app
+      - name: Unit tests
+        run: uv run pytest -q
+      - name: Dependency audit
+        run: uv run pip-audit
+        continue-on-error: true  # visible signal, not a merge blocker

@@ -1,0 +1,65 @@
+[project]
+name = "tieout"
+version = "0.1.0"
+description = "SEC filing -> verified Excel financial model. Deterministic numbers, grounded LLM commentary, evals as a first-class layer."
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115",          # API layer
+  "uvicorn[standard]>=0.30", # ASGI server
+  "sse-starlette>=2.1",      # run progress streaming
+  "httpx>=0.27",             # EDGAR client
+  "tenacity>=8.5",           # backoff on SEC 429/5xx
+  "pydantic>=2.8",           # contracts + LLM output validation
+  "pydantic-settings>=2.4",  # env-based config, keeps secrets out of code
+  "pandas>=2.2",             # statement shaping
+  "openpyxl>=3.1",           # xlsx generation with live formulas
+  "beautifulsoup4>=4.12",    # 10-K HTML parsing
+  "lxml>=5.2",               # fast HTML parser backend
+  "rank-bm25>=0.2",          # keyword side of hybrid retrieval
+  "anthropic>=0.34",         # narration + judge
+  "langgraph>=0.2",          # pipeline orchestration
+  "langchain-anthropic>=0.2",# Anthropic binding for the graph
+  "langfuse>=2.40",          # tracing
+  "slowapi>=0.1.9",          # per-IP rate limiting on the public endpoint
+]
+
+[project.optional-dependencies]
+# Heavy ML deps, skipped in CI. Local dev: uv sync --all-extras
+ml = [
+  "chromadb>=0.5",             # vector store
+  "sentence-transformers>=3.0",# local embeddings + cross-encoder reranker
+]
+
+[dependency-groups]
+dev = [
+  "pytest>=8.3",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.6",
+  "mypy>=1.11",
+  "pip-audit>=2.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "S"]
+ignore = ["S101"]  # asserts are fine in tests; app code shouldn't rely on them anyway
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S"]
+"evals/**" = ["S"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+disallow_untyped_defs = true
+no_implicit_optional = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
