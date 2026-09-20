@@ -23,8 +23,8 @@ from pathlib import Path
 from typing import Any
 
 from app.edgar.client import EdgarClient
-from app.edgar.config import EdgarSettings
 from app.edgar.tags import CANONICAL
+from app.settings import EdgarSettings
 
 FIXTURES_DIR = Path(__file__).parent
 TICKERS = ("AAPL", "MSFT")

@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import re
 
-from app.rag.config import RagSettings
 from app.rag.ingest import parse_filing
 from app.schemas import Chunk
+from app.settings import RagSettings
 
 SOURCE_URL = "https://www.sec.gov/Archives/edgar/data/320193/000032019325000079/aapl-20250927.htm"
 

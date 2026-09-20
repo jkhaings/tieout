@@ -26,7 +26,7 @@ from urllib.parse import urlsplit
 import httpx
 from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential_jitter
 
-from app.edgar.config import EdgarSettings, get_settings
+from app.settings import EdgarSettings, get_edgar_settings
 
 logger = logging.getLogger(__name__)
 
@@ -121,7 +121,7 @@ class EdgarClient:
         transport: httpx.BaseTransport | None = None,
     ) -> None:
         """Build a client. `transport` lets tests inject `httpx.MockTransport`."""
-        self._settings = settings or get_settings()
+        self._settings = settings or get_edgar_settings()
         self._limiter = _RateLimiter(self._settings.max_requests_per_second)
         self._cache_dir = self._settings.cache_dir
         self._cache_dir.mkdir(parents=True, exist_ok=True)

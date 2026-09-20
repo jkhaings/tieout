@@ -10,7 +10,6 @@ the environment running the suite.
 
 from __future__ import annotations
 
-from app.rag.config import RagSettings
 from app.rag.index import (
     BM25Index,
     HybridIndex,
@@ -21,6 +20,7 @@ from app.rag.index import (
 )
 from app.rag.retrieve import Retriever
 from app.schemas import Chunk
+from app.settings import RagSettings
 from tests.rag.conftest import FakeEmbedder
 
 SOURCE_URL = "https://www.sec.gov/Archives/edgar/data/0000320193/example.htm"

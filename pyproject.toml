@@ -17,9 +17,9 @@ dependencies = [
   "lxml>=5.2",               # fast HTML parser backend
   "rank-bm25>=0.2",          # keyword side of hybrid retrieval
   "anthropic>=0.34",         # narration + judge
-  "langgraph>=0.2",          # pipeline orchestration
+  "langgraph>=1.0,<2",       # pipeline orchestration (StateGraph/compile API is 1.x)
   "langchain-anthropic>=0.2",# Anthropic binding for the graph
-  "langfuse>=2.40",          # tracing
+  "langfuse>=4.0,<5",        # tracing (4.x start_as_current_observation API)
   "slowapi>=0.1.9",          # per-IP rate limiting on the public endpoint
 ]
 
@@ -50,6 +50,12 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "S"]
 ignore = ["S101"]  # asserts are fine in tests; app code shouldn't rely on them anyway
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's own DI idiom is `param: T = Depends(...)`; B008 otherwise flags
+# every route as "function call in default argument", which is exactly how
+# FastAPI is designed to be used (app/api/routes.py).
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Body"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S"]

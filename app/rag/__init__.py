@@ -21,7 +21,7 @@ commentary for one line item at a time:
    ~app.rag.narrate.LLMClient` (typically :class:`
    ~app.rag.narrate.AnthropicNarrator`).
 
-:class:`~app.rag.config.RagSettings` holds the tunable knobs threaded
+:class:`~app.settings.RagSettings` holds the tunable knobs threaded
 through every stage above.
 
 This module re-exports the pieces other packages (notably ``app/agent``)
@@ -31,7 +31,6 @@ reaching into individual ``app.rag.*`` submodules.
 
 from __future__ import annotations
 
-from app.rag.config import RagSettings
 from app.rag.index import (
     BM25Index,
     ChromaVectorIndex,
@@ -58,6 +57,7 @@ from app.rag.retrieve import (
     Retriever,
     reciprocal_rank_fusion,
 )
+from app.settings import RagSettings
 
 __all__ = [
     "DRAFT_JSON_SCHEMA",

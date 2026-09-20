@@ -19,8 +19,8 @@ from dataclasses import dataclass
 
 from bs4 import BeautifulSoup
 
-from app.rag.config import RagSettings
 from app.schemas import Chunk
+from app.settings import RagSettings
 
 
 def _heading_re(item: str, title_start: str) -> re.Pattern[str]:

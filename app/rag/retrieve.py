@@ -13,8 +13,8 @@ exactly what lets downstream narration fail closed instead of fabricating.
 RRF-fused scores and cross-encoder rerank scores are on two different,
 unrelated numeric scales (rank-position-derived sums-of-reciprocals vs.
 model-specific logits), so they are never compared against the same
-threshold constant: :attr:`~app.rag.config.RagSettings.min_fused_score`
-gates un-reranked results, :attr:`~app.rag.config.RagSettings.min_rerank_score`
+threshold constant: :attr:`~app.settings.RagSettings.min_fused_score`
+gates un-reranked results, :attr:`~app.settings.RagSettings.min_rerank_score`
 gates reranked ones.
 
 Degraded-mode support (CLAUDE.md rule "guard chromadb / sentence_transformers
@@ -33,9 +33,9 @@ import importlib
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
-from app.rag.config import RagSettings
 from app.rag.index import HybridIndex
 from app.schemas import Chunk
+from app.settings import RagSettings
 
 # How many of the top fused candidates get sent through the (comparatively
 # expensive) cross-encoder reranker. Large enough that a good vector/BM25
@@ -98,7 +98,7 @@ class Reranker(Protocol):
             One float per element of ``texts``, in order. Higher means more
             relevant. The numeric scale is implementation-specific (e.g.
             raw cross-encoder logits), so it must only ever be compared
-            against :attr:`~app.rag.config.RagSettings.min_rerank_score`,
+            against :attr:`~app.settings.RagSettings.min_rerank_score`,
             never against an RRF fused score.
         """
         ...

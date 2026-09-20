@@ -40,8 +40,8 @@ from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import BaseModel, Field, ValidationError
 
-from app.rag.config import RagSettings
 from app.schemas import Chunk, Citation, Commentary
+from app.settings import RagSettings
 
 if TYPE_CHECKING:
     import anthropic

@@ -20,7 +20,7 @@ from app.edgar.client import (
     validate_cik,
     validate_ticker,
 )
-from app.edgar.config import EdgarSettings
+from app.settings import EdgarSettings
 
 _TICKERS_JSON = {
     "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},

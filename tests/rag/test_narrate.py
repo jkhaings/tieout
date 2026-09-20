@@ -14,9 +14,9 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.rag.config import RagSettings
 from app.rag.narrate import _DraftCitation, narrate_line_item
 from app.schemas import Chunk, Commentary
+from app.settings import RagSettings
 from tests.rag.conftest import FakeLLM
 
 SOURCE_URL = "https://www.sec.gov/Archives/edgar/data/0000320193/example.htm"

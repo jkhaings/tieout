@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import pytest
 
-from app.rag.config import RagSettings
 from app.rag.index import HybridIndex
 from app.rag.retrieve import Retriever, reciprocal_rank_fusion
 from app.schemas import Chunk
+from app.settings import RagSettings
 from tests.rag.conftest import FakeEmbedder
 
 SOURCE_URL = "https://www.sec.gov/Archives/edgar/data/0000320193/example.htm"
