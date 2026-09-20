@@ -594,9 +594,26 @@ def run() -> dict[str, Any]:
     if not app_settings.anthropic_configured:
         return {"status": "skipped", "reason": "ANTHROPIC_API_KEY not configured"}
 
+    # app/rag deliberately never loads .env itself (its module docstring
+    # says so): AnthropicNarrator/AnthropicJudge's own default client
+    # construction is a bare anthropic.Anthropic(), which resolves
+    # credentials from the OS environment only, not from AppSettings'
+    # pydantic-settings .env parsing. Mirror app/agent/runner.py's
+    # _build_narrator -- build an explicit-key client here, the one place
+    # that *does* read .env, instead of relying on ambient env resolution
+    # that would silently fail whenever ANTHROPIC_API_KEY lives only in
+    # .env and not the shell's own environment (as it does for most local
+    # dev setups -- CLAUDE.md rule 6 keeps secrets out of the repo, not out
+    # of .env).
+    import anthropic
+
+    api_key = app_settings.anthropic_api_key.get_secret_value()
     rag_settings = RagSettings()
-    generator = AnthropicNarrator(model=rag_settings.narration_model)
-    judge = AnthropicJudge()
+    generator = AnthropicNarrator(
+        model=rag_settings.narration_model,
+        client=anthropic.Anthropic(api_key=api_key),
+    )
+    judge = AnthropicJudge(client=anthropic.Anthropic(api_key=api_key))
 
     narrated_items: list[_NarratedItem] = []
     tickers_run: list[str] = []

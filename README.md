@@ -42,7 +42,50 @@ flowchart LR
 ## Scorecard
 
 <!-- SCORECARD:START -->
-(scorecard not yet generated -- run make evals locally)
+_Generated at 2026-09-20T18:13:47.646284+00:00 from commit `17eb9b3`._
+
+### Tie-out accuracy (binary, cell-level, vs. raw companyfacts JSON)
+
+Overall: **430/430** (100.0%), tolerance $1.
+
+| Ticker | Correct | Total | Accuracy |
+| --- | --- | --- | --- |
+| AAPL | 215 | 215 | 100.0% |
+| MSFT | 215 | 215 | 100.0% |
+
+Mismatches: **0**.
+
+### Retrieval precision/recall@k
+
+Backend: **BM25-only**.
+
+**Production query pattern (`retriever.retrieve(item.label)`)** (measures what the app actually issues today):
+
+| P@1 | P@3 | P@5 | P@10 | R@1 | R@3 | R@5 | R@10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 33.3% | 33.3% | 28.9% | 17.8% | 13.0% | 46.3% | 70.4% | 83.3% |
+(9 scored, 11 without gold, 0 skipped, out of 20 queries)
+
+**Hand-written analyst questions** (measures a broader capability, not what production issues today):
+
+| P@1 | P@3 | P@5 | P@10 | R@1 | R@3 | R@5 | R@10 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 80.0% | 53.3% | 32.0% | 16.7% | 40.0% | 86.7% | 86.7% | 90.0% |
+(15 scored, 0 without gold, 0 skipped, out of 15 queries)
+
+**Fail-closed refusal rate** (irrelevant queries, production `RagSettings()` defaults): **0.0%** (0/5 correctly refused, 0 skipped).
+
+### LLM-as-judge (groundedness, citation presence, invented numbers)
+
+Generator: `claude-sonnet-5`; judge: `claude-opus-5` (deliberately a different model).
+
+| Criterion | Rate |
+| --- | --- |
+| Grounded | 69.2% |
+| Cited | 84.6% |
+| No invented numbers | 92.3% |
+
+(13/13 narrated items judged; tickers run: AAPL, MSFT)
 <!-- SCORECARD:END -->
 
 ## Bugs our own reviews caught
@@ -65,7 +108,7 @@ The product's core claim is "flagged, never smoothed over." Concretely:
 - **Missing XBRL tags** — each canonical line item has a fallback chain of alternate tags; if every tag in the chain is absent, the cell renders blank and is flagged rather than guessed.
 - **Non-calendar fiscal years** — the statement builder handles filers whose fiscal year end doesn't align to the calendar year instead of assuming a December year-end.
 - **Restated values** — uses the latest filed value and notes that a restatement occurred, rather than trying to reconcile filing history.
-- **Weak retrieval** — below the relevance threshold, `narrate.py` refuses to produce commentary ("no grounded commentary available") instead of guessing from a weak match.
+- **Weak retrieval** — below the relevance threshold, `narrate.py` refuses to produce commentary ("no grounded commentary available") instead of guessing from a weak match. Measured caveat, found by `evals/retrieval_eval.py`: the shipped defaults (`min_fused_score=0.0`, no reranker in BM25-only mode) mean the retrieval step itself always returns its top-`k` candidates rather than truly refusing on a genuinely off-topic query (0/5 irrelevant queries were rejected at retrieval in the current scorecard run) — the real fail-closed backstop for a query with no honest answer in the filing is `narrate.py`'s citation/number-grounding checks and the model's own instructed judgment, not a retrieval-level relevance floor. Tightening the default threshold is a real, actionable follow-up outside this session's scope.
 - **LLM schema violations** — one retry with the validation error appended to the prompt; if that also fails, commentary is set to `None` (fail closed) and never fabricated.
 - **SEC rate limiting** — a disk cache, a token-bucket rate limiter, and exponential backoff with jitter on 429/5xx keep the client inside SEC's fair-use policy.
 - **Arithmetic that doesn't tie** — `verifier.py`'s accounting-identity checks (balance sheet equation, cash roll-forward, statement subtotals) surface any failure in the workbook's Tie-out tab and the UI; a failed tie-out is never silently shipped.

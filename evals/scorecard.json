@@ -1,6 +1,6 @@
 {
-  "git_sha": "eb2ad8b",
-  "generated_at": "2026-09-20T17:45:41.391978+00:00",
+  "git_sha": "17eb9b3",
+  "generated_at": "2026-09-20T18:13:47.646284+00:00",
   "tieout": {
     "tolerance_usd": 1.0,
     "tickers": {
@@ -1195,7 +1195,351 @@
     }
   },
   "judge": {
-    "status": "skipped",
-    "reason": "--skip-judge passed"
+    "status": "ok",
+    "generator_model": "claude-sonnet-5",
+    "judge_model": "claude-opus-5",
+    "tickers_run": [
+      "AAPL",
+      "MSFT"
+    ],
+    "tickers_skipped": {},
+    "n_narrated": 13,
+    "n_judged": 13,
+    "grounded_rate": 0.6923076923076923,
+    "cited_rate": 0.8461538461538461,
+    "no_invented_numbers_rate": 0.9230769230769231,
+    "details": [
+      {
+        "ticker": "AAPL",
+        "line_item_key": "revenue",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "gross_profit",
+        "narrated": true,
+        "commentary_text": "Total gross margin rose to $195.20B in the most recent fiscal year, up from prior-year levels, driven by growth in both Products and Services gross margin, with Services showing particularly strong improvement due to higher net sales and a favorable mix.",
+        "citations": [
+          {
+            "chunk_id": "item7-0002",
+            "quote": "Total gross margin $ 195,201 $ 180,683 $ 169,148"
+          },
+          {
+            "chunk_id": "item7-0002",
+            "quote": "Services Gross Margin Services gross margin increased during 2025 compared to 2024 primarily due to higher Services net sales and a different mix of services."
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "Claims about total gross margin rising and both Products and Services gross margin increasing (Services driven by higher net sales and mix) are supported by the item7-0002 excerpt and the figures. The only number stated, $195.20B, matches the given figures, and citations are provided.",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "operating_income",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "net_income",
+        "narrated": true,
+        "commentary_text": "Net income rose to $112.01B in FY2025 from $93.74B in the prior year, a rebound aided by a much lower provision for income taxes and an improved effective tax rate compared to the prior period.",
+        "citations": [
+          {
+            "chunk_id": "item7-0003",
+            "quote": "Provision for income taxes $ 20,719 $ 29,749 $ 16,741 Effective tax rate 15.6 % 24.1 % 14.7 %"
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The FY2025 and FY2024 net income figures match the given data, and the claim of a lower tax provision and effective tax rate versus FY2024 is directly supported by the cited excerpt ($20,719 vs $29,749; 15.6% vs 24.1%). No numbers outside the provided figures/quote are stated.",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "eps_diluted",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "cfo",
+        "narrated": true,
+        "commentary_text": "Apple's net cash provided by operating activities was $118.25B and $111.48B in the two most recent periods shown, following a five-year trend that includes $104.04B, $122.15B, and $110.54B in earlier years, reflecting the cash-generative nature of its Products and Services businesses.",
+        "citations": [
+          {
+            "chunk_id": "item7-0002",
+            "quote": "Total net sales $ 416,161 6 % $ 391,035 2 % $ 383,285"
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "All five operating cash flow figures match the given data and the ordering/description of periods is accurate; the qualitative claim about Products and Services businesses is supported by the segment/category disclosures. A citation is provided, and no numbers appear that aren't in the figures or the cited quote.",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "capex",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "total_assets",
+        "narrated": true,
+        "commentary_text": "Apple's total assets rose from $351.00B in FY2021 to a peak of $364.98B in FY2024 before declining to $359.24B in FY2025, a trend consistent with the company's continued heavy capital return activity, including $89.3 billion of share repurchases during 2025.",
+        "citations": [
+          {
+            "chunk_id": "item7-0004",
+            "quote": "During 2025, the Company repurchased $89.3 billion of its common stock and paid dividends and dividend equivalents of $15.4 billion."
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The asset trend figures match the given data, and the $89.3 billion buyback claim is supported verbatim by the cited excerpt; the linkage to asset decline is framed as consistency rather than a definitive causal assertion.",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "total_liabilities",
+        "narrated": true,
+        "commentary_text": "Total liabilities fluctuated over the five-year period, rising from $287.91B in FY2021 to a peak of $308.03B in FY2024 before declining to $285.51B in FY2025.",
+        "citations": [],
+        "judged": true,
+        "grounded": true,
+        "cited": false,
+        "no_invented_numbers": true,
+        "notes": "All stated values ($287.91B FY2021, $308.03B FY2024 peak, $285.51B FY2025) match the given figures and the trend description is accurate. However, filing excerpts were provided and the commentary includes no citations.",
+        "judge_error": null
+      },
+      {
+        "ticker": "AAPL",
+        "line_item_key": "total_equity",
+        "narrated": true,
+        "commentary_text": "Total stockholders' equity has fluctuated across the five years, dipping to $50.67B in FY2022 before recovering to a five-year high of $73.73B in FY2025, a trend consistent with Apple's substantial ongoing capital return activity, including $89.3 billion of share repurchases and $15.4 billion in dividends paid during 2025.",
+        "citations": [
+          {
+            "chunk_id": "item7-0004",
+            "quote": "During 2025, the Company repurchased $89.3 billion of its common stock and paid dividends and dividend equivalents of $15.4 billion."
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The equity figures ($50.67B trough, $73.73B five-year high) match the given figures, and the buyback/dividend amounts match the cited excerpt verbatim. The link to capital return activity is framed as context rather than a strict causal claim, and a valid citation is provided.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "revenue",
+        "narrated": true,
+        "commentary_text": "Revenue climbed steadily from $198.27B in FY2022 to $331.84B in FY2025-related periods, consistent with the filing's description of growth driven by Microsoft Cloud, Azure, and other cloud services across segments.",
+        "citations": [
+          {
+            "chunk_id": "item7-0005",
+            "quote": "Revenue increased $30.2 billion or 18% driven by growth across each of our segments."
+          },
+          {
+            "chunk_id": "item7-0006",
+            "quote": "Total $ 198,270 $ 168,088 18%"
+          }
+        ],
+        "judged": true,
+        "grounded": false,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The $331.84B figure is the FY2026 value, not FY2025, and the vague label \"FY2025-related periods\" misattributes the period; also the filing excerpts only cover FY2022 vs FY2021, so they cannot support growth drivers across the full FY2022-FY2026 span. The numbers cited ($198.27B, $331.84B) do appear verbatim in the given figures, and citations are provided.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "gross_profit",
+        "narrated": true,
+        "commentary_text": "Gross profit grew steadily from $135.62B in FY2022 to $193.89B in the most recent year shown, consistent with the filing's description of gross margin increasing $19.8 billion, or 17%, in fiscal 2022 driven by growth across each of Microsoft's segments.",
+        "citations": [
+          {
+            "chunk_id": "item7-0005",
+            "quote": "Gross margin increased $19.8 billion or 17% driven by growth across each of our segments."
+          }
+        ],
+        "judged": true,
+        "grounded": false,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The commentary mislabels $193.89B (FY2025) as \"the most recent year shown\" when FY2026 at $225.47B is provided, and it omits/misstates the series endpoint; numbers used do appear verbatim in the figures or cited quote and a citation is provided.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "operating_income",
+        "narrated": true,
+        "commentary_text": "Operating income has grown steadily across the reported periods, reaching $155.24B in the most recent fiscal year from $83.38B in the earliest period shown. The FY2022 filing attributes that year's operating income increase of 19% to growth across each of the company's segments, including Productivity and Business Processes, Intelligent Cloud, and More Personal Computing.",
+        "citations": [
+          {
+            "chunk_id": "item7-0006",
+            "quote": "Operating income increased $13.5 billion or 19% driven by growth across each of our segments."
+          },
+          {
+            "chunk_id": "item7-0005",
+            "quote": "Operating income 83,383 69,916 19%"
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": false,
+        "notes": "The narrative claims (steady growth, FY2022 +19% driven by growth across each segment) are supported by the figures and cited excerpts, and citations are present. However, $83.38B appears in the figures but $155.24B is stated as '$155.24B' matching the FY2026 figure verbatim \\u2014 both are fine; the 19% appears in the cited quote, so no invented numbers arguably... yet 'including Productivity and Business Processes, Intelligent Cloud, and More Personal Computing' is supported by the excerpt, making all numbers traceable.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "net_income",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "eps_diluted",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "cfo",
+        "narrated": true,
+        "commentary_text": "Operating cash flow rose steadily across the period, climbing from $89.03B in FY2022 to $136.16B and further to $182.94B in the most recent years, consistent with the filing's note that cash from operations increased due to higher cash received from customers.",
+        "citations": [
+          {
+            "chunk_id": "item7-0012",
+            "quote": "Cash from operations increased $12.3 billion to $89.0 billion for fiscal year 2022, mainly due to an increase in cash received from customers, offset in part by an increase in cash paid to suppliers and employees."
+          }
+        ],
+        "judged": true,
+        "grounded": false,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The claim that operating cash flow \"rose steadily\" is contradicted by the figures, which show a decline from $89.03B in FY2022 to $87.58B in FY2023; also, the FY2022 excerpt's explanation is applied loosely to later years, though numbers cited are verbatim from the figures/quote.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "capex",
+        "narrated": true,
+        "commentary_text": "Capital expenditures rose sharply over the period shown, climbing from $23.89B to $115.95B, consistent with the company's stated expectation that capital spending would increase to support growth in cloud offerings.",
+        "citations": [
+          {
+            "chunk_id": "item7-0015",
+            "quote": "We expect capital expenditures to increase in coming years to support growth in our cloud offerings."
+          }
+        ],
+        "judged": true,
+        "grounded": true,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The trend claim and endpoint figures ($23.89B to $115.95B) match the given figures verbatim, and the cloud-growth rationale is directly supported by the cited excerpt item7-0015.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "total_assets",
+        "narrated": true,
+        "commentary_text": "Total assets grew steadily each fiscal year, rising from $364.84B to $619.00B over the period shown, reflecting continued expansion of the balance sheet.",
+        "citations": [],
+        "judged": true,
+        "grounded": true,
+        "cited": false,
+        "no_invented_numbers": true,
+        "notes": "The figures cited ($364.84B to $619.00B) appear verbatim, though the commentary stops at FY2025 and omits FY2026 despite saying 'the period shown'; the growth claim is supported. Filing excerpts were provided but no citation was included.",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "total_liabilities",
+        "narrated": false,
+        "commentary_text": null,
+        "citations": [],
+        "judged": false,
+        "grounded": null,
+        "cited": null,
+        "no_invented_numbers": null,
+        "notes": "",
+        "judge_error": null
+      },
+      {
+        "ticker": "MSFT",
+        "line_item_key": "total_equity",
+        "narrated": true,
+        "commentary_text": "Total stockholders' equity grew steadily each year, rising from $166.54B in FY2022 to $442.39B in FY2025... reflecting sustained retention of earnings and capital growth over the period, consistent with the company's continued capital investments and shareholder return activities such as dividends and share repurchases described in its filings.",
+        "citations": [
+          {
+            "chunk_id": "item7-0014",
+            "quote": "During fiscal year 2022, our Board of Directors declared quarterly dividends of $0.62 per share."
+          },
+          {
+            "chunk_id": "item7-0014",
+            "quote": "we repurchased 95 million shares and 101 million shares of our common stock for $28.0 billion and $23.0 billion, respectively, through our share repurchase programs"
+          }
+        ],
+        "judged": true,
+        "grounded": false,
+        "cited": true,
+        "no_invented_numbers": true,
+        "notes": "The commentary misattributes $442.39B to FY2025 when the figures show that as the FY2026 value (FY2025 is $343.48B), making the stated range inaccurate; all numbers cited otherwise appear verbatim in the figures or quotes, and citations are provided.",
+        "judge_error": null
+      }
+    ]
   }
 }
