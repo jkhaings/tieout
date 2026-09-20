@@ -1,6 +1,6 @@
 # Architecture
 
-**One line:** type a ticker → a verified three-statement Excel model with cited management commentary, in about 40 seconds.
+**One line:** type a ticker → a verified three-statement Excel model with cited management commentary. Measured, not estimated: ~70 seconds end-to-end on a cold run with real narration (10 line items narrated sequentially — the largest share of that time), sub-second on a cached repeat request. Concurrent narration (fan out the per-line-item calls instead of looping) is the obvious next latency win, not yet done.
 
 **Design principle:** numbers are computed by deterministic code, words are written by an LLM, and a verifier stands between them and the user. The LLM is never trusted with arithmetic; the pipeline is never allowed to ship an unverified or ungrounded claim.
 
