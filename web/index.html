@@ -1,0 +1,206 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>tieout — SEC filing to verified model</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900">
+  <main class="mx-auto max-w-2xl px-4 py-10">
+    <header class="mb-8">
+      <h1 class="text-2xl font-semibold tracking-tight">tieout</h1>
+      <p class="mt-1 text-sm text-slate-600">
+        Type a ticker. Deterministic code computes every number; an LLM only explains;
+        a verifier stands between them and you.
+      </p>
+    </header>
+
+    <form id="run-form" class="flex gap-2">
+      <input
+        id="ticker-input"
+        type="text"
+        placeholder="AAPL"
+        maxlength="10"
+        autocomplete="off"
+        autocapitalize="characters"
+        class="flex-1 rounded-md border border-slate-300 px-3 py-2 text-sm uppercase tracking-wide
+               shadow-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+      />
+      <button
+        id="run-button"
+        type="submit"
+        class="rounded-md bg-slate-900 px-4 py-2 text-sm font-medium text-white shadow-sm
+               hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        Run
+      </button>
+    </form>
+    <p id="form-error" class="mt-2 hidden text-sm text-red-600"></p>
+
+    <section id="steps" class="mt-8 hidden space-y-2"></section>
+
+    <section id="tieout-banner" class="mt-6 hidden rounded-md border p-4 text-sm"></section>
+
+    <section id="result" class="mt-6 hidden">
+      <a
+        id="download-link"
+        href="#"
+        class="inline-flex items-center gap-2 rounded-md bg-emerald-600 px-4 py-2 text-sm
+               font-medium text-white shadow-sm hover:bg-emerald-500"
+      >
+        Download model.xlsx
+      </a>
+    </section>
+  </main>
+
+  <script>
+    const STEPS = ["fetch", "build", "verify", "retrieve", "narrate", "generate"];
+    const STEP_LABEL = {
+      fetch: "Fetch filing data from SEC EDGAR",
+      build: "Build financial statements",
+      verify: "Run tie-out checks",
+      retrieve: "Retrieve grounding excerpts",
+      narrate: "Generate commentary",
+      generate: "Write the workbook",
+    };
+
+    const form = document.getElementById("run-form");
+    const tickerInput = document.getElementById("ticker-input");
+    const runButton = document.getElementById("run-button");
+    const formError = document.getElementById("form-error");
+    const stepsEl = document.getElementById("steps");
+    const tieoutBanner = document.getElementById("tieout-banner");
+    const resultEl = document.getElementById("result");
+    const downloadLink = document.getElementById("download-link");
+
+    function showError(message) {
+      formError.textContent = message;
+      formError.classList.remove("hidden");
+    }
+
+    function clearError() {
+      formError.classList.add("hidden");
+      formError.textContent = "";
+    }
+
+    function renderSteps() {
+      stepsEl.innerHTML = STEPS.map(
+        (step) => `
+        <div id="step-${step}" data-status="pending" class="flex items-start gap-3 rounded-md border border-slate-200 bg-white p-3">
+          <span class="step-icon mt-0.5 inline-block h-4 w-4 flex-none rounded-full border-2 border-slate-300"></span>
+          <div class="min-w-0 flex-1">
+            <p class="text-sm font-medium text-slate-800">${STEP_LABEL[step]}</p>
+            <p class="step-detail mt-0.5 truncate text-xs text-slate-500"></p>
+          </div>
+        </div>`
+      ).join("");
+      stepsEl.classList.remove("hidden");
+    }
+
+    function iconClasses(status) {
+      if (status === "ok") return "border-emerald-500 bg-emerald-500";
+      if (status === "failed") return "border-red-500 bg-red-500";
+      if (status === "started") return "border-slate-400 bg-white animate-pulse";
+      return "border-slate-300 bg-white";
+    }
+
+    function applyEvent(event) {
+      if (event.step === "done" || event.step === "error") {
+        if (event.step === "error") {
+          showError(event.detail || "The run failed.");
+        }
+        return;
+      }
+      const row = document.getElementById(`step-${event.step}`);
+      if (!row) return;
+      row.dataset.status = event.status;
+      const icon = row.querySelector(".step-icon");
+      icon.className = "step-icon mt-0.5 inline-block h-4 w-4 flex-none rounded-full border-2 " + iconClasses(event.status);
+      const detail = row.querySelector(".step-detail");
+      detail.textContent = event.detail || "";
+
+      if (event.step === "verify") {
+        if (event.status === "failed") {
+          tieoutBanner.className =
+            "mt-6 rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-800";
+          tieoutBanner.textContent =
+            "Tie-out FAILED: " + (event.detail || "one or more checks did not pass") +
+            ". The workbook still ships, flagged in its Tie-out tab.";
+          tieoutBanner.classList.remove("hidden");
+        } else if (event.status === "ok") {
+          tieoutBanner.className =
+            "mt-6 rounded-md border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-800";
+          tieoutBanner.textContent = "Tie-out passed: " + (event.detail || "");
+          tieoutBanner.classList.remove("hidden");
+        }
+      }
+    }
+
+    async function startRun(ticker) {
+      clearError();
+      renderSteps();
+      tieoutBanner.classList.add("hidden");
+      resultEl.classList.add("hidden");
+      runButton.disabled = true;
+
+      let response;
+      try {
+        response = await fetch("/runs", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ticker }),
+        });
+      } catch {
+        showError("Could not reach the server.");
+        runButton.disabled = false;
+        return;
+      }
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        showError(body.error || "Could not start the run.");
+        runButton.disabled = false;
+        return;
+      }
+
+      const { run_id: runId } = await response.json();
+      const source = new EventSource(`/runs/${runId}/events`);
+
+      source.onmessage = (message) => {
+        const event = JSON.parse(message.data);
+        applyEvent(event);
+        if (event.step === "done") {
+          downloadLink.href = `/runs/${runId}/model.xlsx`;
+          resultEl.classList.remove("hidden");
+          source.close();
+          runButton.disabled = false;
+        } else if (event.step === "error") {
+          source.close();
+          runButton.disabled = false;
+        }
+      };
+
+      source.onerror = () => {
+        // EventSource retries transient network errors on its own; once the
+        // server marks the run done/error it closes the stream cleanly
+        // above, so an onerror after that point is a real, unrecoverable
+        // disconnect rather than something worth surfacing as a run failure.
+        if (source.readyState === EventSource.CLOSED) {
+          runButton.disabled = false;
+        }
+      };
+    }
+
+    form.addEventListener("submit", (submitEvent) => {
+      submitEvent.preventDefault();
+      const ticker = tickerInput.value.trim().toUpperCase();
+      if (!ticker) {
+        showError("Enter a ticker.");
+        return;
+      }
+      startRun(ticker);
+    });
+  </script>
+</body>
+</html>
