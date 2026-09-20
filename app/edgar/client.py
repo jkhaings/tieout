@@ -5,9 +5,12 @@ enforced by `_assert_allowed` on every request, not just at URL construction
 time). Every successful response is cached to disk under `cache_dir`, keyed
 by a hash of the full request URL (SECURITY.md item 5: the URL never
 influences the path beyond its hash), so repeat runs are reproducible and
-demos work offline after the first fetch (ARCHITECTURE.md). Requests are
-rate-limited to `max_requests_per_second` and retried with exponential
-backoff + jitter on 429/5xx, per SEC's fair-use policy.
+demos work offline after the first fetch (ARCHITECTURE.md). Cache entries are
+published with an atomic same-directory rename, so concurrent runs never
+observe a partially written entry and a failed write never leaves a
+truncated one behind. Requests are rate-limited to `max_requests_per_second`
+and retried with exponential backoff + jitter on 429/5xx, per SEC's
+fair-use policy.
 """
 
 from __future__ import annotations
@@ -15,7 +18,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -80,6 +85,40 @@ def _assert_allowed(url: str) -> None:
     parts = urlsplit(url)
     if parts.scheme != "https" or parts.hostname not in ALLOWED_HOSTS:
         raise EdgarError(f"host not allowlisted: {url!r}")
+
+
+def _write_text_atomic(path: Path, text: str) -> None:
+    """Write text to path so a reader sees the old file or the new one, never both.
+
+    The payload goes to a fresh temporary file in the same directory, is
+    flushed and fsynced, and is then moved onto path with os.replace -- a
+    same-filesystem rename, atomic on POSIX and on Windows. Three
+    concurrent runs share one process-wide EdgarClient, so a half-written
+    cache entry must never be observable at path; it is not, because path
+    is only ever created by the rename.
+
+    The temporary name comes from tempfile.mkstemp, never from the URL or
+    its hash, so SECURITY.md item 5 still holds. On any failure the
+    temporary file is removed and path is left exactly as it was.
+
+    Args:
+        path: Destination file; its parent directory must already exist.
+        text: Full file content, written as UTF-8.
+
+    Raises:
+        OSError: If the temporary file cannot be created, written,
+            fsynced, or renamed.
+    """
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        Path(tmp_name).unlink(missing_ok=True)
+        raise
 
 
 class _RateLimiter:
@@ -176,12 +215,27 @@ class EdgarClient:
         response.raise_for_status()
         return response
 
+    def _cache_store(self, cache_path: Path, text: str) -> None:
+        """Cache text at cache_path atomically; a write failure is logged, not raised.
+
+        The response has already been fetched successfully by the time
+        this runs, so a full disk or a read-only cache directory must
+        degrade to "this response was not cached", never to a failed
+        request. Only the entry's own name (a URL hash) is logged --
+        never the URL, the response body, or any configuration
+        (SECURITY.md items 6 and 10).
+        """
+        try:
+            _write_text_atomic(cache_path, text)
+        except OSError as exc:
+            logger.warning("cache write failed for %s: %s", cache_path.name, exc)
+
     def _get_json(self, url: str) -> Any:
         cache_path = self._cache_path(url, ".json")
         if cache_path.exists():
             return json.loads(cache_path.read_text(encoding="utf-8"))
         data = self._get(url).json()
-        cache_path.write_text(json.dumps(data), encoding="utf-8")
+        self._cache_store(cache_path, json.dumps(data))
         return data
 
     def _get_text(self, url: str, suffix: str) -> str:
@@ -189,7 +243,7 @@ class EdgarClient:
         if cache_path.exists():
             return cache_path.read_text(encoding="utf-8")
         text = self._get(url).text
-        cache_path.write_text(text, encoding="utf-8")
+        self._cache_store(cache_path, text)
         return text
 
     def company_tickers(self) -> dict[str, Any]:

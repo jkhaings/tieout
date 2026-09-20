@@ -4,6 +4,12 @@ with httpx.MockTransport throughout (CLAUDE.md rule 7).
 
 from __future__ import annotations
 
+import hashlib
+import json
+import logging
+import os
+import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -11,12 +17,15 @@ from typing import Any
 import httpx
 import pytest
 
+from app.edgar import client as client_module
 from app.edgar.client import (
     ALLOWED_HOSTS,
+    COMPANY_TICKERS_URL,
     EdgarClient,
     EdgarError,
     _assert_allowed,
     _RateLimiter,
+    _write_text_atomic,
     validate_cik,
     validate_ticker,
 )
@@ -345,3 +354,192 @@ def test_company_tickers_and_resolve_cik_share_one_cache_entry(tmp_path: Path) -
         client.resolve_cik("MSFT")
     assert mapping == _TICKERS_JSON
     assert call_count == 1
+
+
+# ---- atomic cache writes --------------------------------------------------------
+
+
+def test_cache_entry_is_only_ever_published_by_an_atomic_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = []
+    real_replace = os.replace
+
+    def spy_replace(src: Any, dst: Any) -> None:
+        observed.append((Path(dst).exists(), json.loads(Path(src).read_text(encoding="utf-8"))))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(client_module.os, "replace", spy_replace)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_TICKERS_JSON)
+
+    with _mock_client(tmp_path, handler) as client:
+        client.company_tickers()
+    assert observed == [(False, _TICKERS_JSON)]
+    assert len(list(tmp_path.glob("*.json"))) == 1
+
+
+def test_filing_html_cache_entry_is_only_ever_published_by_an_atomic_rename(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed = []
+    real_replace = os.replace
+
+    def spy_replace(src: Any, dst: Any) -> None:
+        observed.append((Path(dst).exists(), Path(src).read_text(encoding="utf-8")))
+        real_replace(src, dst)
+
+    monkeypatch.setattr(client_module.os, "replace", spy_replace)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, text="<html>ok</html>")
+
+    with _mock_client(tmp_path, handler) as client:
+        html = client.filing_html("320193", "0000320193-24-000123", "aapl-20240928.htm")
+    assert html == "<html>ok</html>"
+    assert observed == [(False, "<html>ok</html>")]
+    assert len(list(tmp_path.glob("*.html"))) == 1
+
+
+@pytest.mark.parametrize("failing_call", ["fsync", "replace"])
+def test_cache_write_failure_leaves_no_residue_and_still_returns_data(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing_call: str,
+) -> None:
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise OSError("simulated disk failure")
+
+    monkeypatch.setattr(client_module.os, failing_call, boom)
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        call_count += 1
+        return httpx.Response(200, json=_TICKERS_JSON)
+
+    with caplog.at_level(logging.WARNING, logger="app.edgar.client"):
+        with _mock_client(tmp_path, handler) as client:
+            result = client.company_tickers()
+            # No residue means the destination was never created and no temp
+            # file is left behind, so a second call must refetch rather than
+            # serve a poisoned/truncated cache entry.
+            assert list(tmp_path.iterdir()) == []
+            second = client.company_tickers()
+    assert result == _TICKERS_JSON
+    assert second == _TICKERS_JSON
+    assert call_count == 2
+    assert list(tmp_path.iterdir()) == []
+    assert "cache write failed" in caplog.text
+
+
+def test_concurrent_atomic_writes_never_produce_a_torn_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    n = 5
+    payloads = [f"payload-{i}-" + ("x" * (i * 37)) for i in range(n)]
+    dest = tmp_path / "shared.txt"
+    barrier = threading.Barrier(n)
+    observed: list[str | None] = []
+    observed_lock = threading.Lock()
+    real_replace = os.replace
+
+    def spy_replace(src: Any, dst: Any) -> None:
+        barrier.wait()
+        with observed_lock:
+            dst_path = Path(dst)
+            current = dst_path.read_text(encoding="utf-8") if dst_path.exists() else None
+            observed.append(current)
+            real_replace(src, dst)
+
+    monkeypatch.setattr(client_module.os, "replace", spy_replace)
+
+    errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+
+    def worker(payload: str) -> None:
+        try:
+            _write_text_atomic(dest, payload)
+        except BaseException as exc:  # noqa: BLE001 -- recorded, not swallowed
+            with errors_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=worker, args=(payload,)) for payload in payloads]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert errors == []
+    for state in observed:
+        assert state is None or state in payloads
+    assert dest.read_text(encoding="utf-8") in payloads
+    assert list(tmp_path.glob(".tmp-*.part")) == []
+
+
+def test_concurrent_company_tickers_calls_produce_one_valid_cache_file(tmp_path: Path) -> None:
+    barrier = threading.Barrier(3)
+    call_lock = threading.Lock()
+    call_count = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal call_count
+        with call_lock:
+            call_count += 1
+        return httpx.Response(200, json=_TICKERS_JSON)
+
+    results: list[Any] = [None, None, None]
+    errors: list[BaseException] = []
+    errors_lock = threading.Lock()
+
+    with _mock_client(tmp_path, handler) as client:
+
+        def worker(idx: int) -> None:
+            try:
+                barrier.wait()
+                results[idx] = client.company_tickers()
+            except BaseException as exc:  # noqa: BLE001 -- recorded, not swallowed
+                with errors_lock:
+                    errors.append(exc)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(3)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+    assert errors == []
+    assert results == [_TICKERS_JSON, _TICKERS_JSON, _TICKERS_JSON]
+    json_files = list(tmp_path.glob("*.json"))
+    assert len(json_files) == 1
+    assert json.loads(json_files[0].read_text(encoding="utf-8")) == _TICKERS_JSON
+
+
+def test_temp_file_name_never_reveals_the_url(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: list[tuple[dict[str, Any], str]] = []
+    real_mkstemp = tempfile.mkstemp
+
+    def spy_mkstemp(*args: Any, **kwargs: Any) -> tuple[int, str]:
+        fd, name = real_mkstemp(*args, **kwargs)
+        observed.append((kwargs, name))
+        return fd, name
+
+    monkeypatch.setattr(client_module.tempfile, "mkstemp", spy_mkstemp)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json=_TICKERS_JSON)
+
+    with _mock_client(tmp_path, handler) as client:
+        client.company_tickers()
+
+    assert len(observed) == 1
+    kwargs, tmp_name = observed[0]
+    digest = hashlib.sha256(COMPANY_TICKERS_URL.encode("utf-8")).hexdigest()
+    assert kwargs["dir"] == tmp_path
+    assert digest not in tmp_name
+    assert "sec.gov" not in tmp_name
+    assert "company_tickers" not in tmp_name
