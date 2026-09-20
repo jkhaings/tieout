@@ -1036,3 +1036,237 @@ def test_fabricated_number_as_truncated_prefix_of_longer_figure_is_rejected() ->
     assert llm.call_count == 2
     assert commentary.text is None
     assert commentary.citations == []
+
+
+def test_number_attributed_to_wrong_fiscal_year_is_rejected() -> None:
+    """A real, correctly-valued number labeled with the WRONG fiscal year is rejected.
+
+    Regression for a real bypass found by adversarial LLM-as-judge
+    verification (evals/judge.py) against real narrated MSFT commentary:
+    a genuine FY2026 value was explicitly mislabeled "FY2025" in the
+    generated text. $416.16B is FY2025's real value, not FY2024's --
+    attributing it to FY2024 must fail even though $416.16B itself is a
+    perfectly real, grounded figure.
+    """
+    response = _draft_json(
+        text="Revenue grew to $416.16B in FY2024.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_correctly_attributed_fiscal_year_is_accepted() -> None:
+    """The mirror of the case above: the right number with the right year label passes."""
+    response = _draft_json(
+        text="Revenue grew to $416.16B in FY2025 from $391.04B in FY2024.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue grew to $416.16B in FY2025 from $391.04B in FY2024."
+
+
+def test_most_recent_year_phrase_checked_against_true_latest_year() -> None:
+    """ "The most recent (fiscal) year" is checked against the figures' actual latest year.
+
+    Regression for a real bypass found by adversarial LLM-as-judge
+    verification: real narrated commentary called a value "the most
+    recent year shown" when a LATER year was actually present in the
+    figures. $391.04B is FY2024's value, not FY2025's (the true latest
+    year here) -- calling it "the most recent fiscal year" must fail.
+    """
+    response = _draft_json(
+        text="Revenue reached $391.04B in the most recent fiscal year.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_most_recent_year_phrase_matching_true_latest_year_is_accepted() -> None:
+    """The mirror of the case above: "most recent year" correctly naming the true latest year."""
+    response = _draft_json(
+        text="Revenue reached $416.16B in the most recent fiscal year.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue reached $416.16B in the most recent fiscal year."
+
+
+def test_year_label_belonging_to_neighboring_number_is_not_misattributed() -> None:
+    """A year mention idiomatically labeling one number is not misattributed to its neighbor.
+
+    "$89.03B in FY2022 to $136.16B" labels $89.03B, not $136.16B --
+    $136.16B carries no explicit year claim here at all and must not be
+    checked against FY2022 (which would wrongly reject it, since
+    $136.16B's own real year in these figures is FY2024).
+    """
+    figures = ["FY2022: $89.03B", "FY2023: $87.58B", "FY2024: $136.16B"]
+    response = _draft_json(
+        text="Operating cash flow climbed from $89.03B in FY2022 to $136.16B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="cfo",
+        label="Operating cash flow",
+        figures=figures,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Operating cash flow climbed from $89.03B in FY2022 to $136.16B."
+
+
+def test_explicit_wrong_year_on_neighboring_number_is_still_rejected() -> None:
+    """An explicit (wrong) year attached to the SECOND of two adjacent numbers is still caught.
+
+    Same sentence shape as the case above, but this time $136.16B carries
+    its OWN explicit (incorrect) year label -- unlike the case above,
+    this must be rejected, proving the neighbor-disambiguation doesn't
+    swallow a genuine, explicitly-attached wrong-year claim.
+    """
+    figures = ["FY2022: $89.03B", "FY2023: $87.58B", "FY2024: $136.16B"]
+    response = _draft_json(
+        text="Operating cash flow climbed from $89.03B in FY2022 to $136.16B in FY2023.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="cfo",
+        label="Operating cash flow",
+        figures=figures,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_steadily_claim_with_real_interior_reversal_is_rejected() -> None:
+    """A "steadily" claim across a span is rejected if any interior year actually reversed.
+
+    Regression for a real bypass found by adversarial LLM-as-judge
+    verification: real narrated MSFT commentary claimed operating cash
+    flow "rose steadily" across five years while silently skipping a real
+    interior decline between the first two. The existing endpoint-only
+    direction check couldn't catch this (the NET change across the full
+    span is still an increase); this uses AAPL's own real FY2022->FY2023
+    dip already present in _FY_FIGURES ($394.33B -> $383.29B) to pin the
+    same bug pattern.
+    """
+    response = _draft_json(
+        text="Revenue grew steadily from $365.82B in FY2021 to $416.16B in FY2025.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_growth_claim_without_steadily_wording_ignores_interior_dip() -> None:
+    """The same real interior dip is NOT flagged when the claim doesn't say "steadily".
+
+    A bare "grew from X to Y" only claims the net change between two
+    points, not that every year in between complied -- only a monotonic
+    modifier ("steadily", "consistently", etc.) upgrades the claim to
+    cover interior years too (see test above).
+    """
+    response = _draft_json(
+        text="Revenue grew from $365.82B in FY2021 to $416.16B in FY2025.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue grew from $365.82B in FY2021 to $416.16B in FY2025."
+
+
+def test_steadily_claim_with_genuinely_monotonic_span_is_accepted() -> None:
+    """A "steadily" claim is accepted when every interior year actually complies.
+
+    FY2023 -> FY2024 -> FY2025 in _FY_FIGURES ($383.29B -> $391.04B ->
+    $416.16B) is genuinely, unbrokenly increasing -- no interior reversal
+    for the check to find.
+    """
+    response = _draft_json(
+        text="Revenue grew steadily from $383.29B in FY2023 to $416.16B in FY2025.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue grew steadily from $383.29B in FY2023 to $416.16B in FY2025."

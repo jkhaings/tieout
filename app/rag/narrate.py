@@ -272,12 +272,16 @@ DRAFT_JSON_SCHEMA: dict[str, Any] = {
 _NUMBER_TOKEN_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?[%BMKTbmkt]?")
 
 # --------------------------------------------------------------------------
-# Sign/polarity and direction-of-change checks, layered on top of the plain
-# number-grounding above. A number can be textually present in a figure or
-# quote yet still misrepresent it -- e.g. claiming a positive "$9.45B" when
-# the only grounding is "FY2024: -$9.45B" -- or the surrounding prose can
-# assert a direction of change ("grew", "declined", "unchanged") the year-
-# over-year figures contradict outright. Both checks parse our own
+# Sign/polarity, year-attribution, and direction-of-change checks, layered
+# on top of the plain number-grounding above. A number can be textually
+# present in a figure or quote yet still misrepresent it: claiming a
+# positive "$9.45B" when the only grounding is "FY2024: -$9.45B"; naming
+# the wrong fiscal year for an otherwise-real value (adversarially found in
+# real narrations: a genuine FY2026 figure explicitly mislabeled "FY2025",
+# or called "the most recent year" when a later year is actually reported);
+# or asserting a direction of change ("grew", "declined", "unchanged", or
+# "steadily" rose/declined across a whole span) the year-over-year figures
+# contradict outright. Every one of these checks parses our own
 # pre-formatted figure strings back into numbers purely to compare them;
 # this is the validator reading its own data, never the LLM computing
 # (CLAUDE.md rule 1). Every check here abstains ("cannot determine" ->
@@ -392,6 +396,56 @@ _BASELINE_PREPOSITION_RE = re.compile(
     re.IGNORECASE,
 )
 
+# Attached-year claims recognized near one specific number (see
+# _claimed_year_near): an explicit "FY<year>" mention, or a relative "the
+# most recent/latest/current year" phrase (resolved to max(series), the
+# actual latest reported year, since prose very commonly refers to the
+# latest period this way instead of naming it). Each is anchored so it
+# matches only when it is the LAST thing immediately before the number
+# (nothing but whitespace/colon in between, e.g. "FY2025: $X") or the
+# FIRST thing immediately after it (nothing but a short preposition in
+# between, e.g. "$X in FY2025") -- not merely present somewhere nearby.
+# That anchoring, combined with the neighbor-clipped window
+# _claimed_year_near builds, is what keeps "$89.03B in FY2022 to
+# $136.16B" from misattributing "FY2022" (which idiomatically labels
+# $89.03B, immediately before it) to $136.16B, which sits just past the
+# word "to" on the far side of that same mention.
+_BEFORE_YEAR_LABEL_RE = re.compile(r"FY\s*(\d{4})\s*:?\s*\Z", re.IGNORECASE)
+_AFTER_YEAR_LABEL_RE = re.compile(r"\A\s*(?:in|for|during|of)?\s*FY\s*(\d{4})\b", re.IGNORECASE)
+_BEFORE_MOST_RECENT_RE = re.compile(
+    r"(?:the\s+)?(?:most\s+recent|latest|current|last\s+reported)\s+(?:fiscal\s+)?years?"
+    r"\s*(?:of|:)?\s*\Z",
+    re.IGNORECASE,
+)
+_AFTER_MOST_RECENT_RE = re.compile(
+    r"\A\s*(?:in|for|during|of|as)?\s*(?:the\s+)?"
+    r"(?:most\s+recent|latest|current|last\s+reported)\s+(?:fiscal\s+)?years?\b",
+    re.IGNORECASE,
+)
+
+# How many characters of text around a number _claimed_year_near will scan
+# for an attached year claim -- large enough to fit the longest phrase
+# recognized (" in the most recent fiscal year" is 31 characters
+# including its leading space and preposition; padded above that so the
+# phrase's own final letter is never the one truncated), but a distant,
+# unrelated mention is still never mistaken for this specific number's own
+# claim: the neighbor-clipping in _validate_draft (via value_bounds) does
+# that job, not this window size.
+_YEAR_LABEL_PROXIMITY_CHARS = 35
+
+# A modifier that upgrades a two-point direction claim into a claim about
+# EVERY step across the anchored span, not just its two endpoints -- e.g.
+# "rose steadily from FY2022 to FY2026" claims no interior reversal,
+# unlike a bare "rose from FY2022 to FY2026" (which only claims the net
+# change between those two points). Deliberately does NOT include "steady"
+# alone (that is _FLAT_RE's own word, a different claim) and does not
+# attempt exhaustive synonym coverage -- a modifier this list misses
+# simply makes the interior check below not fire, never a false accept of
+# the endpoint-level check it sits on top of.
+_MONOTONIC_MODIFIER_RE = re.compile(
+    r"steadily|consistently|continuously|each\s+year|every\s+year", re.IGNORECASE
+)
+
 # A year-over-year move smaller than this (relative) is too small for a
 # strong "grew"/"declined" claim to be confidently right or wrong about --
 # each pre-formatted figure already carries up to ~0.5% error from
@@ -400,6 +454,16 @@ _DIRECTION_MIN_RELATIVE_CHANGE = 0.02
 # A "flat"/"unchanged" claim is only contradicted once the move is clearly
 # material, for the same rounding-tolerance reason.
 _FLAT_CLAIM_MAX_RELATIVE_CHANGE = 0.05
+
+# A materially smaller dead-band than _DIRECTION_MIN_RELATIVE_CHANGE, used
+# only for the interior-monotonicity check (_interior_monotonicity_violation):
+# two ADJACENT years' figures are far less likely to coincidentally straddle
+# a rounding boundary than two arbitrary, possibly-distant endpoints are, so
+# a tighter threshold here still safely absorbs genuine 2-decimal-at-scale
+# rounding noise while catching a real, material one-year reversal --
+# exactly the gap between consecutive fiscal years a genuine business
+# result would produce, not a rounding artifact.
+_INTERIOR_MIN_RELATIVE_CHANGE = 0.005
 
 
 def _polarity_at(text: str, start: int, end: int) -> str:
@@ -605,6 +669,125 @@ def _anchored_years(clause: str, year_figures: Sequence[tuple[int, str]]) -> set
     return years
 
 
+def _years_containing_token(
+    token: str, *, polarity: str, year_figures: Sequence[tuple[int, str]]
+) -> set[int]:
+    """Return every fiscal year whose OWN figure line grounds ``token`` at ``polarity``.
+
+    Reuses the same boundary- and polarity-aware match
+    :func:`_grounded_polarities` uses, scoped to one year-labeled figure
+    line at a time, so a value that genuinely repeats across two years
+    (rare, but not impossible) returns every such year rather than picking
+    one arbitrarily.
+
+    Args:
+        token: A number-like substring extracted from the draft's text.
+        polarity: ``"+"`` or ``"-"``, the sign the token was written with.
+        year_figures: The ``(year, figure)`` pairs from
+            :func:`_year_labeled_figures`.
+
+    Returns:
+        The set of fiscal years whose own figure line contains ``token``
+        as an isolated number under ``polarity``.
+    """
+    pattern = re.compile(rf"(?<![\d.]){re.escape(token)}(?!\.?\d)(?![%BMKTbmkt])")
+    years: set[int] = set()
+    for year, figure in year_figures:
+        if any(
+            _polarity_at(figure, m.start(), m.end()) == polarity for m in pattern.finditer(figure)
+        ):
+            years.add(year)
+    return years
+
+
+def _claimed_year_near(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    series: dict[int, float],
+    prev_end: int | None,
+    next_start: int | None,
+) -> int | None:
+    """Return the fiscal year claimed for the number at ``text[start:end]``, or ``None``.
+
+    Recognizes two forms -- an explicit "FY<year>" mention, or a relative
+    "the most recent/latest/current year" phrase (resolved to
+    ``max(series)``) -- each anchored to sit immediately adjacent to the
+    number (see :data:`_BEFORE_YEAR_LABEL_RE` et al.), within a small,
+    neighbor-clipped window: the window never crosses past the end of the
+    PREVIOUS number token or the start of the NEXT one, so a year mention
+    that idiomatically belongs to a neighboring number (e.g. "$89.03B in
+    FY2022 to $136.16B") is never misattributed to this one. Returns
+    ``None`` -- abstain -- when no such claim is found in bounds, or when
+    an explicit-year claim and a most-recent-phrase claim are both found
+    and disagree.
+
+    Args:
+        text: The draft's full commentary text.
+        start: Start index of the number's match within ``text``.
+        end: End index (exclusive) of the number's match within ``text``.
+        series: The parsed fiscal-year-to-value series (see
+            :func:`_parse_year_series`), used to resolve a "most recent
+            year" phrase to a concrete year.
+        prev_end: End index of the immediately preceding number token's
+            match, or ``None`` if this is the first number in ``text``.
+        next_start: Start index of the immediately following number
+            token's match, or ``None`` if this is the last number in
+            ``text``.
+
+    Returns:
+        The claimed fiscal year, or ``None`` if none is unambiguously
+        attached to this specific number.
+    """
+    before_bound = max(start - _YEAR_LABEL_PROXIMITY_CHARS, prev_end if prev_end is not None else 0)
+    after_bound = min(
+        end + _YEAR_LABEL_PROXIMITY_CHARS, next_start if next_start is not None else len(text)
+    )
+    before = text[before_bound:start]
+    after = text[end:after_bound]
+
+    candidates: set[int] = set()
+    before_explicit = _BEFORE_YEAR_LABEL_RE.search(before)
+    if before_explicit:
+        candidates.add(int(before_explicit.group(1)))
+    after_explicit = _AFTER_YEAR_LABEL_RE.search(after)
+    if after_explicit:
+        candidates.add(int(after_explicit.group(1)))
+    if series and (_BEFORE_MOST_RECENT_RE.search(before) or _AFTER_MOST_RECENT_RE.search(after)):
+        candidates.add(max(series))
+
+    return candidates.pop() if len(candidates) == 1 else None
+
+
+def _year_mismatch_error(token: str, claimed_year: int, true_years: set[int]) -> str:
+    """Build the retry-prompt error for a number attributed to the wrong fiscal year.
+
+    Built exclusively from the token itself (character-set-constrained,
+    see :data:`_NUMBER_TOKEN_RE` -- it cannot contain tag-forging
+    characters) and our own parsed year integers -- no other
+    model-authored free text is echoed, so this needs no
+    :func:`_neutralize_delimiters` call, matching :func:`_direction_error`.
+
+    Args:
+        token: The number-like substring the year was attached to.
+        claimed_year: The fiscal year the draft's text attributed it to.
+        true_years: The fiscal year(s) whose own figure actually contains
+            this value.
+
+    Returns:
+        A retry-prompt error string.
+    """
+    true_year_desc = " or ".join(f"FY{year}" for year in sorted(true_years))
+    return (
+        f"Your previous response's text attributed {token!r} to FY{claimed_year}, "
+        f"but the given figures show that value under {true_year_desc}, not "
+        f"FY{claimed_year}. State the correct fiscal year for every number you "
+        "name, or describe it without naming a specific year if you are not "
+        "sure which one it is."
+    )
+
+
 _CLAIM_PHRASES = {"up": "an increase", "down": "a decrease", "flat": "essentially unchanged"}
 
 # Every error message below is built exclusively from our own fixed
@@ -652,6 +835,74 @@ def _direction_error(claim: str, earlier: int, later: int, figure_body: dict[int
     )
 
 
+def _interior_monotonicity_violation(
+    claim: str, series: dict[int, float], earlier: int, later: int
+) -> tuple[int, int] | None:
+    """Return the first interior step between ``earlier`` and ``later`` that breaks ``claim``.
+
+    Only meaningful when the clause used a monotonic modifier ("steadily",
+    etc., see :data:`_MONOTONIC_MODIFIER_RE`) -- a bare two-point claim is
+    validated by its endpoints alone in :func:`_check_direction_claims`.
+    Walks every consecutive pair of years in ``series`` within
+    ``[earlier, later]`` -- the FULL reported series, not just the years
+    this clause's own numbers happened to anchor -- so a clause that
+    cherry-picks a rising subset of years while silently skipping an
+    interior dip is still caught.
+
+    Args:
+        claim: The claimed direction, ``"up"`` or ``"down"``.
+        series: The parsed fiscal-year-to-value series.
+        earlier: The earlier fiscal year of the overall comparison.
+        later: The later fiscal year of the overall comparison.
+
+    Returns:
+        The ``(year1, year2)`` pair of the first interior step whose
+        movement, once outside the tighter interior rounding dead-band
+        (:data:`_INTERIOR_MIN_RELATIVE_CHANGE`), contradicts ``claim``, or
+        ``None`` if every step complies.
+    """
+    years_in_span = sorted(year for year in series if earlier <= year <= later)
+    for year1, year2 in zip(years_in_span, years_in_span[1:], strict=False):
+        value1, value2 = series[year1], series[year2]
+        if value1 <= 0 or value2 <= 0:
+            continue
+        relative = (value2 - value1) / value1
+        if abs(relative) <= _INTERIOR_MIN_RELATIVE_CHANGE:
+            continue
+        if ("up" if relative > 0 else "down") != claim:
+            return year1, year2
+    return None
+
+
+def _monotonic_violation_error(
+    claim: str, year1: int, year2: int, figure_body: dict[int, str]
+) -> str:
+    """Build the retry-prompt error for a "steadily"-type claim an interior step contradicts.
+
+    Built exclusively from our own fixed vocabulary, parsed year integers,
+    and figure strings -- see :func:`_direction_error`'s docstring for why
+    this needs no :func:`_neutralize_delimiters` call.
+
+    Args:
+        claim: The claimed direction, ``"up"`` or ``"down"``.
+        year1: The earlier year of the interior step that broke the claim.
+        year2: The later year of that same interior step.
+        figure_body: Fiscal year to its own pre-formatted figure body.
+
+    Returns:
+        A retry-prompt error string.
+    """
+    contrary = "a decrease" if claim == "up" else "an increase"
+    return (
+        f"Your previous response's text claimed a steady/consistent "
+        f"{_CLAIM_PHRASES[claim]}, but the given figures show {contrary} from "
+        f"FY{year1} ({figure_body[year1]}) to FY{year2} ({figure_body[year2]}) "
+        "within that span. Describe the trend accurately, including any "
+        'interior reversal, or drop the "steadily"/"consistently" wording if '
+        "the movement was not monotonic."
+    )
+
+
 def _check_direction_claims(text: str, *, figures: Sequence[str]) -> str:
     """Return ``""`` unless some clause in ``text`` asserts a change the figures contradict.
 
@@ -664,9 +915,15 @@ def _check_direction_claims(text: str, *, figures: Sequence[str]) -> str:
     single anchored year has an explicit baseline preposition like
     "from"/"versus" pointing at a year we can't identify). Movements inside
     a rounding dead-band are treated as unable to support a strong
-    direction claim and are skipped rather than flagged. Abstains entirely
-    (returns ``""``) whenever ``figures`` doesn't carry at least two
-    year-labeled, parseable data points.
+    direction claim and are skipped rather than flagged. When the clause
+    also uses a monotonic modifier ("steadily", "consistently", etc., see
+    :data:`_MONOTONIC_MODIFIER_RE`), additionally walks every interior year
+    between the anchored endpoints (via :func:`_interior_monotonicity_violation`)
+    so a claim that cherry-picks two rising endpoints while silently
+    skipping a real interior reversal is still caught, not just a
+    contradicted net change. Abstains entirely (returns ``""``) whenever
+    ``figures`` doesn't carry at least two year-labeled, parseable data
+    points.
 
     Args:
         text: The draft's commentary text.
@@ -719,6 +976,12 @@ def _check_direction_claims(text: str, *, figures: Sequence[str]) -> str:
             continue
         if ("up" if relative > 0 else "down") != claim:
             return _direction_error(claim, earlier, later, figure_body)
+
+        if _MONOTONIC_MODIFIER_RE.search(clause):
+            violation = _interior_monotonicity_violation(claim, series, earlier, later)
+            if violation is not None:
+                year1, year2 = violation
+                return _monotonic_violation_error(claim, year1, year2, figure_body)
     return ""
 
 
@@ -751,13 +1014,23 @@ def _validate_draft(
         the draft's own cited quotes, under the SAME polarity (sign) it
         was written with in ``text`` (see :func:`_grounded_polarities`) --
         a positive claim does not ground against a figure that is only
-        ever given as negative, or vice versa. Afterward, a separate
-        direction-of-change check (see :func:`_check_direction_claims`)
-        rejects any clause whose asserted direction ("grew", "declined",
-        "unchanged") contradicts the year-over-year figures it is
-        demonstrably anchored to; it abstains whenever fewer than two
-        year-labeled figures are parseable, on negation/hedge/ambiguity, or
-        on a movement inside a rounding dead-band.
+        ever given as negative, or vice versa. If that same number is also
+        explicitly or relatively attributed to a specific fiscal year (an
+        explicit "FY<year>" mention, or a "the most recent/latest year"
+        phrase), that attribution must match the year the figures actually
+        report it under (see :func:`_claimed_year_near` /
+        :func:`_years_containing_token`) -- a real, correctly-valued number
+        mislabeled with the wrong year is rejected just as a fabricated one
+        would be. Afterward, a separate direction-of-change check (see
+        :func:`_check_direction_claims`) rejects any clause whose asserted
+        direction ("grew", "declined", "unchanged") contradicts the
+        year-over-year figures it is demonstrably anchored to, and, when
+        the clause claims the movement was "steady"/"consistent" across
+        the whole span, additionally rejects a claim that skips over a real
+        interior reversal between its two endpoints; it abstains whenever
+        fewer than two year-labeled figures are parseable, on
+        negation/hedge/ambiguity, or on a movement inside a rounding
+        dead-band.
 
     Per-citation validation failures identify the offending citation by its
     1-based position (e.g. "citation #2") rather than by echoing its raw,
@@ -836,7 +1109,22 @@ def _validate_draft(
 
     if draft.text:
         quotes = [citation.quote for citation in draft.citations]
-        for match in _NUMBER_TOKEN_RE.finditer(draft.text):
+        year_figures = _year_labeled_figures(figures)
+        series = _parse_year_series(figures)
+        number_matches = list(_NUMBER_TOKEN_RE.finditer(draft.text))
+        # Bounds used to clip _claimed_year_near's search window, EXCLUDING
+        # any match that is itself just the digit run of a "FY<year>"
+        # mention (e.g. the "2025" in "FY2025") -- such a match is not a
+        # competing value the window needs to stop at; it is very likely
+        # the year mention _claimed_year_near is trying to find in the
+        # first place, and clipping the window at its own start/end would
+        # cut off the very digits that make it a year mention.
+        value_bounds = [
+            (m.start(), m.end())
+            for m in number_matches
+            if not re.search(r"FY\s*\Z", draft.text[: m.start()], re.IGNORECASE)
+        ]
+        for match in number_matches:
             token = match.group(0)
             polarity = _polarity_at(draft.text, match.start(), match.end())
             found = _grounded_polarities(token, figures=figures, quotes=quotes)
@@ -848,6 +1136,26 @@ def _validate_draft(
                 )
             if polarity not in found:
                 return None, _SIGN_ERRORS[polarity].format(token=repr(token))
+
+            prev_end = next(
+                (end for start, end in reversed(value_bounds) if end <= match.start()), None
+            )
+            next_start = next((start for start, end in value_bounds if start >= match.end()), None)
+            claimed_year = _claimed_year_near(
+                draft.text,
+                match.start(),
+                match.end(),
+                series=series,
+                prev_end=prev_end,
+                next_start=next_start,
+            )
+            if claimed_year is not None:
+                true_years = _years_containing_token(
+                    token, polarity=polarity, year_figures=year_figures
+                )
+                if true_years and claimed_year not in true_years:
+                    return None, _year_mismatch_error(token, claimed_year, true_years)
+
         direction_error = _check_direction_claims(draft.text, figures=figures)
         if direction_error:
             return None, direction_error
