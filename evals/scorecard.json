@@ -1,0 +1,1201 @@
+{
+  "git_sha": "eb2ad8b",
+  "generated_at": "2026-09-20T17:45:41.391978+00:00",
+  "tieout": {
+    "tolerance_usd": 1.0,
+    "tickers": {
+      "AAPL": {
+        "correct": 215,
+        "total": 215,
+        "accuracy": 1.0
+      },
+      "MSFT": {
+        "correct": 215,
+        "total": 215,
+        "accuracy": 1.0
+      }
+    },
+    "overall": {
+      "correct": 430,
+      "total": 430,
+      "accuracy": 1.0
+    },
+    "mismatches": []
+  },
+  "retrieval": {
+    "ks": [
+      1,
+      3,
+      5,
+      10
+    ],
+    "backend": {
+      "use_embeddings": false,
+      "embedder": null,
+      "reranker": null,
+      "is_ml_available": true,
+      "is_chromadb_available": true,
+      "is_sentence_transformers_available": true
+    },
+    "corpus_fingerprint_verified": {
+      "aapl": {
+        "ticker": "AAPL",
+        "source_file": "tests/fixtures/aapl_10k_excerpt.html",
+        "sha256": "b32b8b8d4de9bc92fe9ba3eb310525f511d1337365d1ed1f847aaae1efeb8f60",
+        "chunk_count": 32,
+        "verified": true
+      },
+      "msft": {
+        "ticker": "MSFT",
+        "source_file": "evals/datasets/corpus/msft_10k_excerpt.html",
+        "sha256": "e2768d564c745f208f5e764408866414c9dba0531fb706fa8ea9c4e3f20b6d2f",
+        "chunk_count": 46,
+        "verified": true
+      }
+    },
+    "production_labels": {
+      "slice": "production_labels",
+      "note": "Mirrors the real production query pattern: app/agent/graph.py calling retriever.retrieve(item.label) with the bare LineItem.label string, for each of app.agent.formatting.COMMENTARY_LINE_ITEMS. Several entries have an empty relevant_chunk_ids by design (the figure lives outside this Item 1A/Item 7 corpus, e.g. in Item 8's financial statements) -- see each such entry's own 'note' and this slice's 'num_without_gold'.",
+      "num_queries": 20,
+      "num_scored": 9,
+      "num_without_gold": 11,
+      "num_skipped": 0,
+      "precision_at_k": {
+        "1": 0.3333333333333333,
+        "3": 0.3333333333333333,
+        "5": 0.2888888888888889,
+        "10": 0.17777777777777778
+      },
+      "recall_at_k": {
+        "1": 0.12962962962962962,
+        "3": 0.46296296296296297,
+        "5": 0.7037037037037037,
+        "10": 0.8333333333333334
+      },
+      "per_query": [
+        {
+          "ticker": "AAPL",
+          "query": "Revenue",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0001",
+            "item7-0002"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0015",
+            "item1a-0018",
+            "item1a-0014",
+            "item1a-0009",
+            "item1a-0023"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.0
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Gross profit",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0002"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0021",
+            "item1a-0020",
+            "item7-0002",
+            "item1a-0005",
+            "item1a-0004",
+            "item1a-0019",
+            "item1a-0003",
+            "item1a-0022",
+            "item7-0000",
+            "item7-0001"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Operating income",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0003",
+            "item7-0005",
+            "item7-0006",
+            "item1a-0023",
+            "item1a-0000",
+            "item7-0002",
+            "item1a-0006",
+            "item1a-0004",
+            "item1a-0003",
+            "item1a-0013"
+          ],
+          "note": "No chunk in this corpus states or discusses an 'operating income' total; Apple's included Item 7 excerpt has zero occurrences of the phrase and no income-statement summary table (verified by full-text search)."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Net income",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0003",
+            "item7-0005",
+            "item1a-0000",
+            "item7-0001",
+            "item7-0002",
+            "item1a-0023",
+            "item7-0006",
+            "item1a-0020",
+            "item1a-0021",
+            "item1a-0001"
+          ],
+          "note": "No chunk in this corpus states or discusses 'net income'; zero occurrences verified by full-text search of the AAPL Item 1A + Item 7 corpus."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Diluted earnings per share",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0004",
+            "item7-0003",
+            "item1a-0023",
+            "item1a-0021",
+            "item1a-0024",
+            "item1a-0022",
+            "item1a-0009",
+            "item1a-0012",
+            "item1a-0004",
+            "item1a-0005"
+          ],
+          "note": "No chunk states a diluted EPS figure; the only 'per share' mentions in this corpus are the quarterly cash dividend per share, not EPS."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Net cash provided by operating activities",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item1a-0022",
+            "item7-0003",
+            "item7-0002",
+            "item7-0001",
+            "item1a-0006",
+            "item1a-0019",
+            "item1a-0024",
+            "item1a-0021",
+            "item1a-0023",
+            "item7-0004"
+          ],
+          "note": "No chunk states an operating cash flow total; item7-0003 mentions cash 'generated by ongoing operations' only qualitatively, with no dollar figure, so it was not included as a match."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Capital expenditures",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item1a-0003",
+            "item1a-0008",
+            "item7-0004",
+            "item7-0003",
+            "item1a-0013"
+          ],
+          "note": "No chunk states a capital expenditures total; item7-0004's manufacturing/other purchase obligations figures are contractual commitments, not capex, so they were not included as a match."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Total assets",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0004",
+            "item7-0002",
+            "item7-0003",
+            "item1a-0008",
+            "item7-0001",
+            "item1a-0001",
+            "item1a-0000",
+            "item7-0006",
+            "item1a-0013",
+            "item1a-0011"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. Zero occurrences of 'total assets' verified by full-text search."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Total liabilities",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0002",
+            "item7-0003",
+            "item7-0001",
+            "item1a-0023",
+            "item7-0006",
+            "item1a-0001",
+            "item1a-0000",
+            "item7-0004",
+            "item1a-0013",
+            "item7-0005"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. Zero occurrences of 'total liabilities' verified by full-text search."
+        },
+        {
+          "ticker": "AAPL",
+          "query": "Total stockholders' equity",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0002",
+            "item7-0003",
+            "item7-0001",
+            "item1a-0001",
+            "item1a-0000",
+            "item7-0004"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. The only stockholders'-equity mentions are cross-references to Note 16, with no total figure."
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Revenue",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0007",
+            "item7-0004",
+            "item7-0003",
+            "item7-0005",
+            "item7-0000",
+            "item7-0006",
+            "item7-0002",
+            "item7-0013",
+            "item1a-0001",
+            "item7-0008"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.5,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Gross profit",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0007",
+            "item7-0005",
+            "item7-0006",
+            "item7-0008",
+            "item7-0003",
+            "item1a-0001",
+            "item1a-0002",
+            "item1a-0003",
+            "item7-0004"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.5,
+            "5": 0.5,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Operating income",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005",
+            "item7-0006"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0006",
+            "item7-0007",
+            "item7-0005",
+            "item1a-0001",
+            "item7-0008",
+            "item7-0017",
+            "item1a-0019",
+            "item7-0004",
+            "item1a-0002",
+            "item1a-0003"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.3
+          },
+          "recall_at_k": {
+            "1": 0.3333333333333333,
+            "3": 0.6666666666666666,
+            "5": 0.6666666666666666,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Net income",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005",
+            "item7-0006"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0009",
+            "item7-0011",
+            "item7-0006",
+            "item7-0008",
+            "item7-0005",
+            "item7-0004",
+            "item7-0010",
+            "item7-0019",
+            "item7-0012",
+            "item7-0017"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.4,
+            "10": 0.3
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.6666666666666666,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Diluted earnings per share",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005",
+            "item7-0006"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0005",
+            "item7-0004",
+            "item7-0011",
+            "item7-0006",
+            "item7-0015",
+            "item7-0014",
+            "item7-0010",
+            "item7-0007",
+            "item1a-0002",
+            "item1a-0023"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.6,
+            "10": 0.3
+          },
+          "recall_at_k": {
+            "1": 0.3333333333333333,
+            "3": 0.6666666666666666,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Net cash provided by operating activities",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0012"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0011",
+            "item7-0001",
+            "item7-0013",
+            "item7-0012",
+            "item7-0006",
+            "item7-0008",
+            "item7-0000",
+            "item7-0005",
+            "item7-0017",
+            "item7-0014"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Capital expenditures",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0012",
+            "item7-0015"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0015",
+            "item7-0011",
+            "item7-0013",
+            "item7-0014",
+            "item7-0018",
+            "item7-0017"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 0.5,
+            "5": 0.5,
+            "10": 0.5
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Total assets",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0013",
+            "item7-0012",
+            "item1a-0004",
+            "item7-0019",
+            "item7-0018",
+            "item7-0001",
+            "item7-0006",
+            "item7-0014",
+            "item7-0008",
+            "item7-0000"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. Zero occurrences of 'total assets' verified by full-text search."
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Total liabilities",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0012",
+            "item7-0018",
+            "item7-0013",
+            "item7-0019",
+            "item7-0001",
+            "item7-0006",
+            "item7-0014",
+            "item1a-0018",
+            "item7-0015",
+            "item7-0017"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. The contractual-obligations table's $180,944 million 'Total' is future payment commitments, not a balance-sheet total-liabilities figure, so it was not included as a match."
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Total stockholders' equity",
+          "skipped": false,
+          "has_gold": false,
+          "relevant_chunk_ids": [],
+          "retrieved_chunk_ids": [
+            "item7-0014",
+            "item7-0015",
+            "item7-0009",
+            "item7-0008",
+            "item7-0013",
+            "item7-0001",
+            "item7-0006",
+            "item7-0017",
+            "item7-0011",
+            "item7-0000"
+          ],
+          "note": "Balance-sheet totals live in Item 8, outside this Item 1A/Item 7 corpus. The only stockholders'-equity mentions are cross-references to Note 16, with no total figure."
+        }
+      ]
+    },
+    "analyst_queries": {
+      "slice": "analyst_queries",
+      "note": "Broader, hand-written natural-language analyst questions measuring a retrieval capability the app does not literally exercise today -- production only ever queries the bare COMMENTARY_LINE_ITEMS labels (see 'production_labels').",
+      "num_queries": 15,
+      "num_scored": 15,
+      "num_without_gold": 0,
+      "num_skipped": 0,
+      "precision_at_k": {
+        "1": 0.8,
+        "3": 0.5333333333333333,
+        "5": 0.32,
+        "10": 0.16666666666666669
+      },
+      "recall_at_k": {
+        "1": 0.4,
+        "3": 0.8666666666666667,
+        "5": 0.8666666666666667,
+        "10": 0.9
+      },
+      "per_query": [
+        {
+          "ticker": "AAPL",
+          "query": "What tariff and trade restriction risks does Apple describe, including the Section 232 investigation?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0001",
+            "item1a-0002"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0002",
+            "item7-0001",
+            "item7-0000",
+            "item1a-0000",
+            "item7-0002",
+            "item1a-0023",
+            "item7-0005",
+            "item1a-0011",
+            "item7-0004",
+            "item1a-0021"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 0.5,
+            "5": 0.5,
+            "10": 0.5
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What cybersecurity attack risks does Apple describe?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0012",
+            "item1a-0013"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0002",
+            "item1a-0011",
+            "item7-0005",
+            "item7-0001",
+            "item1a-0024",
+            "item1a-0023",
+            "item7-0004",
+            "item1a-0010",
+            "item1a-0013",
+            "item7-0000"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 0.0,
+            "5": 0.0,
+            "10": 0.5
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "How does Apple describe risks from the EU Digital Markets Act?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0017",
+            "item1a-0018"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0017",
+            "item7-0000",
+            "item1a-0002",
+            "item1a-0011",
+            "item1a-0010",
+            "item7-0004",
+            "item1a-0015",
+            "item1a-0016",
+            "item1a-0005",
+            "item1a-0023"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 0.5,
+            "5": 0.5,
+            "10": 0.5
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What does Apple say about its exposure to foreign currency exchange rate fluctuations?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0021",
+            "item1a-0022"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0021",
+            "item1a-0022",
+            "item1a-0023",
+            "item1a-0020",
+            "item7-0003",
+            "item7-0005",
+            "item1a-0000",
+            "item1a-0015",
+            "item7-0006",
+            "item1a-0016"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What concentration risk does Apple describe in its vendor non-trade receivables?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0022",
+            "item1a-0023"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0022",
+            "item1a-0023",
+            "item1a-0021",
+            "item1a-0002",
+            "item1a-0000",
+            "item7-0005",
+            "item7-0001",
+            "item1a-0001",
+            "item1a-0011",
+            "item1a-0024"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What were Apple's net sales by product category in fiscal 2025?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0001",
+            "item7-0002"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0001",
+            "item7-0000",
+            "item7-0002",
+            "item7-0003",
+            "item1a-0021",
+            "item1a-0000",
+            "item1a-0002",
+            "item1a-0020",
+            "item1a-0001",
+            "item1a-0023"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What is Apple's outstanding debt and future interest payments on its Notes?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0003",
+            "item7-0004"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0003",
+            "item7-0004",
+            "item1a-0000",
+            "item1a-0022",
+            "item7-0000",
+            "item1a-0002",
+            "item7-0006",
+            "item1a-0017",
+            "item1a-0023",
+            "item7-0005"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What new accounting standard updates is Apple evaluating?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0004",
+            "item7-0005"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0005",
+            "item7-0004",
+            "item7-0006",
+            "item1a-0002",
+            "item7-0001",
+            "item7-0000",
+            "item1a-0005",
+            "item1a-0023",
+            "item1a-0019",
+            "item1a-0017"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "AAPL",
+          "query": "How might machine learning and artificial intelligence affect Apple's intellectual property and licensing risk?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0008",
+            "item1a-0009"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0009",
+            "item1a-0008",
+            "item1a-0014",
+            "item1a-0015",
+            "item1a-0016",
+            "item1a-0007",
+            "item1a-0004",
+            "item1a-0018",
+            "item1a-0017",
+            "item1a-0019"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "What risks does Microsoft describe from the development and use of AI?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0010"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0001",
+            "item1a-0010",
+            "item1a-0011",
+            "item7-0000",
+            "item1a-0015",
+            "item1a-0002",
+            "item1a-0009",
+            "item1a-0017",
+            "item1a-0003",
+            "item7-0003"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "What does Microsoft say about the Solorigate/Nobelium cyberattack?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0005",
+            "item1a-0007"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0005",
+            "item1a-0007",
+            "item7-0001",
+            "item1a-0019",
+            "item1a-0022",
+            "item1a-0021",
+            "item1a-0014",
+            "item1a-0023",
+            "item1a-0018",
+            "item1a-0016"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "What antitrust and competition law scrutiny has Microsoft faced from the European Commission over Windows?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0012",
+            "item1a-0013"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0012",
+            "item1a-0013",
+            "item1a-0014",
+            "item1a-0000",
+            "item1a-0015",
+            "item1a-0010",
+            "item7-0018",
+            "item7-0001",
+            "item1a-0009",
+            "item1a-0003"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "What does Microsoft disclose about GDPR compliance risk and potential fines?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item1a-0016",
+            "item1a-0017"
+          ],
+          "retrieved_chunk_ids": [
+            "item1a-0016",
+            "item1a-0014",
+            "item1a-0017",
+            "item1a-0013",
+            "item1a-0018",
+            "item1a-0015",
+            "item7-0001",
+            "item1a-0004",
+            "item1a-0019",
+            "item1a-0023"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "How did Microsoft's cash flow from operations change in fiscal year 2022?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0012"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0002",
+            "item7-0012",
+            "item7-0017",
+            "item7-0011",
+            "item7-0005",
+            "item7-0019",
+            "item7-0000",
+            "item1a-0016",
+            "item7-0003",
+            "item1a-0024"
+          ],
+          "precision_at_k": {
+            "1": 0.0,
+            "3": 0.3333333333333333,
+            "5": 0.2,
+            "10": 0.1
+          },
+          "recall_at_k": {
+            "1": 0.0,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        },
+        {
+          "ticker": "MSFT",
+          "query": "What was the financial impact of Microsoft's Nuance Communications acquisition?",
+          "skipped": false,
+          "has_gold": true,
+          "relevant_chunk_ids": [
+            "item7-0000",
+            "item7-0001"
+          ],
+          "retrieved_chunk_ids": [
+            "item7-0001",
+            "item7-0000",
+            "item7-0002",
+            "item7-0003",
+            "item7-0010",
+            "item1a-0003",
+            "item7-0007",
+            "item7-0004",
+            "item7-0005",
+            "item7-0015"
+          ],
+          "precision_at_k": {
+            "1": 1.0,
+            "3": 0.6666666666666666,
+            "5": 0.4,
+            "10": 0.2
+          },
+          "recall_at_k": {
+            "1": 0.5,
+            "3": 1.0,
+            "5": 1.0,
+            "10": 1.0
+          }
+        }
+      ]
+    },
+    "irrelevant_queries_refusal": {
+      "note": "Fraction of queries with no answer in either corpus that correctly returned zero chunks: fail-closed refusal behavior (CLAUDE.md rule 4), not ranking quality. Uses RagSettings() at real, unmodified production defaults (thresholds included), not the ranking pass's widened final_top_k.",
+      "num_queries": 5,
+      "num_scored": 5,
+      "num_skipped": 0,
+      "num_correct_refusals": 0,
+      "refusal_rate": 0.0,
+      "per_query": [
+        {
+          "ticker": "AAPL",
+          "query": "What is the capital city of France?",
+          "skipped": false,
+          "correctly_refused": false,
+          "retrieved_chunk_ids": [
+            "item1a-0008",
+            "item7-0004",
+            "item1a-0002",
+            "item1a-0013",
+            "item7-0003",
+            "item7-0001"
+          ]
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Explain the rules of cricket.",
+          "skipped": false,
+          "correctly_refused": false,
+          "retrieved_chunk_ids": [
+            "item1a-0016",
+            "item1a-0017",
+            "item1a-0013",
+            "item1a-0012",
+            "item1a-0001",
+            "item1a-0009"
+          ]
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What is the boiling point of water at sea level?",
+          "skipped": false,
+          "correctly_refused": false,
+          "retrieved_chunk_ids": [
+            "item1a-0023",
+            "item1a-0002",
+            "item7-0001",
+            "item7-0006",
+            "item1a-0018",
+            "item1a-0022"
+          ]
+        },
+        {
+          "ticker": "MSFT",
+          "query": "Who won the FIFA World Cup in 2018?",
+          "skipped": false,
+          "correctly_refused": false,
+          "retrieved_chunk_ids": [
+            "item7-0010",
+            "item1a-0008",
+            "item1a-0019",
+            "item1a-0017",
+            "item1a-0023",
+            "item7-0000"
+          ]
+        },
+        {
+          "ticker": "AAPL",
+          "query": "What is the recipe for chocolate chip cookies?",
+          "skipped": false,
+          "correctly_refused": false,
+          "retrieved_chunk_ids": [
+            "item1a-0002",
+            "item7-0001",
+            "item1a-0023",
+            "item1a-0017",
+            "item1a-0018",
+            "item1a-0008"
+          ]
+        }
+      ]
+    }
+  },
+  "judge": {
+    "status": "skipped",
+    "reason": "--skip-judge passed"
+  }
+}
