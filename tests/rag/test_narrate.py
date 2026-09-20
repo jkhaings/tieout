@@ -14,7 +14,7 @@ import json
 import pytest
 from pydantic import ValidationError
 
-from app.rag.narrate import _DraftCitation, narrate_line_item
+from app.rag.narrate import _DraftCitation, _parse_figure_value, narrate_line_item
 from app.schemas import Chunk, Commentary
 from app.settings import RagSettings
 from tests.rag.conftest import FakeLLM
@@ -41,7 +41,33 @@ _OTHER_CHUNK = Chunk(
     source_url=SOURCE_URL,
 )
 
+_NET_SALES_CHUNK = Chunk(
+    chunk_id="item7-0004",
+    section="Item 7. Management's Discussion and Analysis",
+    text=(
+        "Item 7. Management's Discussion and Analysis. Net sales increased "
+        "6% year-over-year across all reportable segments."
+    ),
+    source_url=SOURCE_URL,
+)
+
 _FIGURES = ["$391.04B"]
+
+# Year-labeled, oldest-first, exactly as app/agent/formatting.py:build_figures
+# produces them.
+_FY_FIGURES = [
+    "FY2021: $365.82B",
+    "FY2022: $394.33B",
+    "FY2023: $383.29B",
+    "FY2024: $391.04B",
+    "FY2025: $416.16B",
+]
+_NEGATIVE_FY_FIGURES = ["FY2023: -$3.71B", "FY2024: -$9.45B"]
+
+# A real, verbatim substring of _REVENUE_CHUNK.text usable as a citation
+# quote wherever a test needs one to satisfy the (unrelated) citation
+# checks while it exercises sign/direction grounding.
+_REVENUE_QUOTE = "Revenue increased to $391.04B driven by strong iPhone sales"
 
 
 def _draft_json(*, text: str | None, citations: list[dict[str, str]]) -> str:
@@ -460,3 +486,553 @@ def test_unknown_chunk_id_error_does_not_leak_raw_chunk_id_into_retry_prompt() -
     assert unknown_chunk_id not in retry_user
     assert "citation #1" in retry_user
     assert commentary.text == "Revenue rose to $391.04B."
+
+
+def test_false_decline_claim_against_growing_figures_is_rejected() -> None:
+    """A "declined" claim is rejected when the year-labeled figures actually grew.
+
+    Regression for the sign-/direction-blindness bug: AAPL revenue actually
+    grew FY2024 -> FY2025 ($391.04B -> $416.16B), so a draft describing that
+    move as a decline must fail closed.
+    """
+    response = _draft_json(
+        text="Revenue declined to $416.16B from $391.04B.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_false_growth_claim_against_declining_figures_is_rejected() -> None:
+    """A "grew" claim is rejected when the year-labeled figures actually declined.
+
+    Mirror direction of the false-decline case: FY2022 -> FY2023 revenue
+    actually declined ($394.33B -> $383.29B).
+    """
+    response = _draft_json(
+        text="Revenue grew to $383.29B from $394.33B.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_true_growth_claim_is_accepted() -> None:
+    """A "grew" claim matching the actual year-over-year increase is accepted."""
+    response = _draft_json(
+        text="Revenue grew to $416.16B from $391.04B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue grew to $416.16B from $391.04B."
+
+
+def test_true_decline_claim_is_accepted() -> None:
+    """A "declined" claim matching the actual year-over-year decrease is accepted."""
+    response = _draft_json(
+        text="Revenue declined to $383.29B from $394.33B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue declined to $383.29B from $394.33B."
+
+
+def test_single_year_claim_compared_against_nearest_prior_reported_year_is_rejected() -> None:
+    """A single-year claim is checked against the nearest prior reported year.
+
+    "Revenue fell ... in FY2025" has no explicit baseline year in the text,
+    so the nearest prior reported year (FY2024) is used -- and FY2024 ->
+    FY2025 was actually an increase, so the "fell" claim must be rejected.
+    """
+    response = _draft_json(
+        text="Revenue fell to $416.16B in FY2025.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_positive_claim_rejected_against_negative_only_figure() -> None:
+    """A positive-valued claim is rejected when the figure is only ever given negative.
+
+    Regression for the sign-blindness bug: "$9.45B" written as positive
+    must not ground against "FY2024: -$9.45B".
+    """
+    response = _draft_json(
+        text="Financing activities used $9.45B during the period.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_NEGATIVE_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_negative_claim_accepted_against_matching_negative_figure() -> None:
+    """A negative-valued claim is accepted when the figure is given negative too."""
+    response = _draft_json(
+        text="Financing activities used -$9.45B during the period.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_NEGATIVE_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Financing activities used -$9.45B during the period."
+
+
+def test_dollarless_positive_claim_rejected_against_negative_only_figure() -> None:
+    """A positive-valued claim rejected even when it (and the figure) omit the "$".
+
+    Regression caught by adversarial verification: dropping the "$" is
+    ordinary phrasing ("generated 9.45B" instead of "generated $9.45B").
+    When the token being checked has no "$" but the matching occurrence in
+    the figure ("-$9.45B") does, the character immediately before the
+    match is "$", not "-" -- _NEGATIVE_PREFIX_RE must still see through
+    that "$" to the minus sign two characters back, or this reopens the
+    exact sign bug this module exists to close.
+    """
+    response = _draft_json(
+        text="Financing activities generated 9.45B during the period.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_NEGATIVE_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_dollarless_negative_claim_accepted_against_matching_negative_figure() -> None:
+    """A correctly negative-valued claim is accepted even when it omits the "$".
+
+    Mirror of the case above: the minus sign is present but "$" is not
+    ("used -9.45B" instead of "used -$9.45B"). Before the fix this was
+    wrongly rejected with an error claiming the figure was "only ...
+    positive", which is backwards -- the figure is only ever negative.
+    """
+    response = _draft_json(
+        text="Financing activities used -9.45B during the period.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_NEGATIVE_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Financing activities used -9.45B during the period."
+
+
+@pytest.mark.parametrize(
+    ("text", "expect_rejected"),
+    [
+        pytest.param(
+            "Revenue rebounded to $416.16B from $391.04B.", False, id="rebounded_true_growth"
+        ),
+        pytest.param(
+            "Revenue rebounded to $383.29B from $394.33B.", True, id="rebounded_false_growth"
+        ),
+        pytest.param(
+            "Revenue tumbled to $383.29B from $394.33B.", False, id="tumbled_true_decline"
+        ),
+        pytest.param(
+            "Revenue tumbled to $416.16B from $391.04B.", True, id="tumbled_false_decline"
+        ),
+    ],
+)
+def test_additional_direction_vocabulary_words_are_checked(
+    text: str, expect_rejected: bool
+) -> None:
+    """ "Rebounded"/"tumbled" are recognized direction words, checked like any other.
+
+    Regression caught by adversarial verification: a false direction claim
+    phrased with a synonym absent from the fixed vocabulary slips past the
+    check entirely (it abstains rather than firing). "rebounded" and
+    "tumbled" are common enough in financial prose to be worth adding
+    explicitly; both true and false claims using them are exercised here.
+    """
+    response = _draft_json(
+        text=text,
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    responses = [response, response] if expect_rejected else [response]
+    llm = FakeLLM(responses=responses)
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    if expect_rejected:
+        assert llm.call_count == 2
+        assert commentary.text is None
+        assert commentary.citations == []
+    else:
+        assert llm.call_count == 1
+        assert commentary.text == text
+
+
+def test_increased_does_not_spuriously_collide_with_decrease_vocabulary() -> None:
+    """ "Increased" must not also match a decrease-word fragment (e.g. "eas(ed|es|ing)").
+
+    Regression guard: an earlier vocabulary expansion added "eased" as a
+    decrease synonym, which is a literal substring of "incr[eased]" -- so
+    _DECREASE_RE would also spuriously fire on ordinary "increased" text,
+    making _claimed_direction see both directions and abstain instead of
+    verifying the single most common phrasing. This pins the true-growth
+    claim as actually verified (accepted via a real check, not abstention)
+    by also exercising the false-growth mirror, which must still reject.
+    """
+    good = _draft_json(
+        text="Revenue increased to $416.16B from $391.04B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    bad = _draft_json(
+        text="Revenue increased to $383.29B from $394.33B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+
+    llm_good = FakeLLM(responses=[good])
+    commentary_good = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm_good,
+    )
+    assert llm_good.call_count == 1
+    assert commentary_good.text == "Revenue increased to $416.16B from $391.04B."
+
+    llm_bad = FakeLLM(responses=[bad, bad])
+    commentary_bad = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm_bad,
+    )
+    assert llm_bad.call_count == 2
+    assert commentary_bad.text is None
+
+
+def test_direction_claim_about_different_metric_abstains() -> None:
+    """A direction word anchored to no year of this line item's own figures is not checked.
+
+    "net sales increased 6%" has no number matching any of this line
+    item's own year-labeled figures, so the direction check abstains
+    entirely for that clause instead of wrongly attributing the claim to
+    the wrong metric/series.
+    """
+    response = _draft_json(
+        text="Revenue was $416.16B in FY2025 while net sales also increased 6% year-over-year.",
+        citations=[
+            {
+                "chunk_id": _NET_SALES_CHUNK.chunk_id,
+                "quote": "Net sales increased 6% year-over-year",
+            }
+        ],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK, _NET_SALES_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == (
+        "Revenue was $416.16B in FY2025 while net sales also increased 6% year-over-year."
+    )
+
+
+def test_direction_check_abstains_without_fiscal_year_prefixed_figures() -> None:
+    """The direction check abstains entirely when figures aren't year-labeled.
+
+    Protects the existing happy-path test's bare, non-"FY"-prefixed
+    ``_FIGURES`` fixture: fewer than two (year, value) pairs parse, so the
+    direction check must never engage at all.
+    """
+    response = _draft_json(text="Revenue rose to $391.04B.", citations=[])
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue rose to $391.04B."
+
+
+def test_flat_claim_rejected_against_material_change() -> None:
+    """An "unchanged"/flat claim is rejected when the actual move is material."""
+    response = _draft_json(
+        text="Revenue was unchanged at $416.16B versus $391.04B.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []
+
+
+def test_direction_check_abstains_for_negative_value_series() -> None:
+    """The direction check abstains when both endpoints of the series are negative.
+
+    "Increase"/"decrease" semantics are ambiguous once both compared values
+    are negative (a value moving from -$3.71B to -$9.45B is a larger
+    outflow, not unambiguously an "increase" or "decrease" in the way the
+    word is used for positive metrics), so the check skips rather than
+    flags it.
+    """
+    response = _draft_json(
+        text="Investing outflows declined to -$9.45B from -$3.71B.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_NEGATIVE_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Investing outflows declined to -$9.45B from -$3.71B."
+
+
+def test_year_token_still_grounds_against_its_own_fiscal_year_label() -> None:
+    """A bare year digit-run still grounds against its own "FY<year>:" figure label.
+
+    Protects the existing over-match behavior (e.g. "Item 7" / "10-K")
+    while the sign-/direction-aware rewrite is in place: "2025" inside
+    "FY2025" must still ground against the figure "FY2025: $416.16B".
+    """
+    response = _draft_json(
+        text="Revenue was $416.16B in FY2025.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == "Revenue was $416.16B in FY2025."
+
+
+@pytest.mark.parametrize(
+    "figure_body,expected",
+    [
+        ("$391.04B", 391.04e9),
+        ("-$1.23B", -1.23e9),
+        ("$6.42", 6.42),
+        ("15.55B shares", 15.55e9),
+        ("$123.46K", 123460.0),
+        ("(1,234)", -1234.0),
+        ("n/a", None),
+        ("N/M", None),
+    ],
+)
+def test_parse_figure_value(figure_body: str, expected: float | None) -> None:
+    """_parse_figure_value parses every pre-formatted figure shape app/agent/formatting.py emits."""
+    result = _parse_figure_value(figure_body)
+    if expected is None:
+        assert result is None
+    else:
+        assert result == pytest.approx(expected)
+
+
+def test_direction_error_retry_prompt_names_only_our_own_figures() -> None:
+    """The direction-error retry prompt never echoes the model's own free text.
+
+    Only our own fixed vocabulary, parsed year integers, and pre-formatted
+    figure strings appear in the error -- never a substring of the model's
+    rejected commentary -- so it needs no _neutralize_delimiters call.
+    """
+    bad_response = _draft_json(
+        text="Revenue declined to $416.16B from $391.04B.",
+        citations=[],
+    )
+    good_response = _draft_json(
+        text="Revenue grew to $416.16B from $391.04B.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[bad_response, good_response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    retry_system, retry_user = llm.calls[1]
+    assert "Revenue declined to" not in retry_user
+    assert "FY2024" in retry_user
+    assert "FY2025" in retry_user
+    assert retry_system == llm.calls[0][0]
+    assert commentary.text == "Revenue grew to $416.16B from $391.04B."
+
+
+def test_comma_does_not_split_a_comparison_from_its_baseline() -> None:
+    """A comma introducing the baseline half of a comparison is not a clause boundary.
+
+    An over-eager clause-splitter that treated the comma as a boundary
+    would lose the "from $394.33B in FY2022" baseline and wrongly abstain
+    (or worse, mis-anchor) instead of confirming this true decline.
+    """
+    response = _draft_json(
+        text="Revenue was $383.29B in FY2023 alone, a decline from $394.33B in FY2022.",
+        citations=[{"chunk_id": _REVENUE_CHUNK.chunk_id, "quote": _REVENUE_QUOTE}],
+    )
+    llm = FakeLLM(responses=[response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 1
+    assert commentary.text == (
+        "Revenue was $383.29B in FY2023 alone, a decline from $394.33B in FY2022."
+    )
+
+
+def test_fabricated_number_as_truncated_prefix_of_longer_figure_is_rejected() -> None:
+    """A fabricated number that is a truncated PREFIX of a real figure is rejected.
+
+    Mirror of test_fabricated_number_embedded_in_longer_figure_is_rejected
+    (a truncated suffix): "$416" must not ground against the real
+    "$416.16B" merely because it is a textual prefix of it.
+    """
+    response = _draft_json(
+        text="Revenue grew to $416 billion from a figure never provided.",
+        citations=[],
+    )
+    llm = FakeLLM(responses=[response, response])
+
+    commentary = narrate_line_item(
+        line_item_key="revenue",
+        label="Revenue",
+        figures=_FY_FIGURES,
+        chunks=[_REVENUE_CHUNK],
+        client=llm,
+    )
+
+    assert llm.call_count == 2
+    assert commentary.text is None
+    assert commentary.citations == []

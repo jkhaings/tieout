@@ -271,17 +271,171 @@ DRAFT_JSON_SCHEMA: dict[str, Any] = {
 # guarantee that no genuine, ungrounded numeric claim ever slips through.
 _NUMBER_TOKEN_RE = re.compile(r"\$?\d[\d,]*(?:\.\d+)?[%BMKTbmkt]?")
 
+# --------------------------------------------------------------------------
+# Sign/polarity and direction-of-change checks, layered on top of the plain
+# number-grounding above. A number can be textually present in a figure or
+# quote yet still misrepresent it -- e.g. claiming a positive "$9.45B" when
+# the only grounding is "FY2024: -$9.45B" -- or the surrounding prose can
+# assert a direction of change ("grew", "declined", "unchanged") the year-
+# over-year figures contradict outright. Both checks parse our own
+# pre-formatted figure strings back into numbers purely to compare them;
+# this is the validator reading its own data, never the LLM computing
+# (CLAUDE.md rule 1). Every check here abstains ("cannot determine" ->
+# treat as passing) whenever it lacks enough structure to be confident --
+# fail-closed for fabrication/misrepresentation, fail-open (silent) for
+# ambiguity, per CLAUDE.md rule 4: an over-eager rejection would silently
+# cost real, correct commentary, which is worse than the bug being fixed.
 
-def _token_is_grounded(token: str, *, figures: Sequence[str], quotes: Sequence[str]) -> bool:
-    """Return whether a number-like token appears, as an isolated number, in a figure/quote.
+_MINUS_CHARS = "-−–"
 
-    Uses a boundary-aware search rather than plain substring containment:
-    plain ``token in figure`` would (wrongly) accept a fabricated token like
-    ``"1.04"`` merely because it happens to occur contiguously inside a
-    longer, unrelated real figure such as ``"$391.04B"``. The match is
-    required not to be immediately preceded or followed by another digit or
-    a decimal point, so ``token`` can only match a figure/quote where it
-    appears as its own complete number, never as a fragment of a longer one.
+# Matches immediately before a number's start position when that number is
+# preceded by a minus sign (plain hyphen or a unicode minus/en-dash), with
+# at most an optional "$" and/or a single space in between, and that minus
+# sign is not itself part of a longer digit run.
+#
+# The optional "$" is load-bearing, not cosmetic: this same pattern is used
+# to read polarity out of BOTH the draft's own claim text and every figure/
+# quote occurrence a token is checked against (see _polarity_at). A token
+# extracted from the draft can omit the "$" the corresponding figure has
+# (ordinary phrasing, e.g. "generated 9.45B" instead of "generated
+# $9.45B") -- when that dollar-less token is then located inside a figure
+# like "FY2024: -$9.45B", the match starts right after the "$", so the
+# character immediately before it is "$", not "-". Without tolerating that
+# "$", the minus two characters back would never be seen, and the figure
+# would be silently misread as positive -- reopening exactly the sign bug
+# this module exists to close, in both directions (a false unsigned claim
+# against a negative-only figure would wrongly ground, and a true signed
+# claim without "$" would wrongly reject). Confirmed by adversarial
+# verification; regression tests below pin both directions.
+_NEGATIVE_PREFIX_RE = re.compile(rf"(?:^|[^\d])[{re.escape(_MINUS_CHARS)}]\$? ?$")
+
+# Matches a string that consists entirely of digits -- used to tell a bare
+# integer like a year ("2024") apart from an actual currency/count figure
+# when deciding whether parentheses around it mean "negative".
+_BARE_DIGITS_RE = re.compile(r"\d+\Z")
+
+# Matches one whole "FY<year>: <figure>" line as produced by
+# app/agent/formatting.py:build_figures, e.g. "FY2024: $391.04B".
+_FIGURE_YEAR_RE = re.compile(r"\AFY(\d{4})\s*:\s*(.+?)\s*\Z")
+
+# Parses the numeric body of one pre-formatted figure (after any leading
+# sign/parens have already been peeled off by _parse_figure_value), e.g.
+# "$391.04B", "$6.42", "15.55B". Mirrors app/agent/formatting.py's
+# format_figure in reverse.
+_FIGURE_BODY_RE = re.compile(
+    rf"\A[{re.escape(_MINUS_CHARS)}]?\s?\$?(\d[\d,]*(?:\.\d+)?)\s*([KMBT]?)", re.IGNORECASE
+)
+_MAGNITUDE_SCALE = {"": 1.0, "K": 1e3, "M": 1e6, "B": 1e9, "T": 1e12}
+
+# Splits commentary text into clauses on sentence boundaries and on a fixed
+# set of contrast/enumeration conjunctions, so a direction word describing
+# one metric or one year never contaminates a neighboring clause about a
+# different metric or year in the same sentence. Deliberately does NOT
+# split on a bare comma (a comma very commonly introduces the baseline half
+# of a single comparison, e.g. "..., a decline from $394.33B in FY2022.").
+_CLAUSE_SPLIT_RE = re.compile(
+    r"[.;:!?](?!\d)\s*"
+    r"|\s+(?:and|but|while|whereas|although|though|despite|however|including|"
+    r"includes|included|excluding|offset|partially)\s*",
+    re.IGNORECASE,
+)
+
+# No \b word-boundary wrapper on any alternative below -- these fragments
+# are checked with plain .search() against arbitrary prose, and adding
+# fixed-vocabulary synonyms is safe ONLY as long as the new fragment isn't
+# also a literal substring of some word already covered by the OTHER
+# direction's regex. A fragment like "eas(?:ed|es|ing)" (dropped from the
+# decrease list after this was caught empirically) is a substring of
+# "incr[eased]" -- so on plain "Revenue increased..." text, _INCREASE_RE
+# fires correctly but _DECREASE_RE would ALSO spuriously fire on the same
+# clause, and _claimed_direction sees two hits and abstains instead of
+# verifying the (extremely common) increase claim at all. Before adding a
+# new synonym, grep it against every existing word in BOTH lists.
+_INCREASE_RE = re.compile(
+    r"(?:increas(?:e|ed|es|ing)|rose|rise|rises|risen|rising|grew|grow|grows|grown|"
+    r"growing|growth|expand(?:ed|ing|s)?|expansion|improv(?:e|ed|es|ement)|climb(?:ed|s)?|"
+    r"jump(?:ed|s)?|surg(?:ed|es)?|gain(?:ed|s)?|accelerated|doubled|rebound(?:ed|ing)?|"
+    r"recover(?:ed|y|ing)?|advanc(?:ed|es|ing)|rebuilt|up\s+from|higher\s+than)",
+    re.IGNORECASE,
+)
+_DECREASE_RE = re.compile(
+    r"(?:decreas(?:e|ed|es|ing)|declin(?:e|ed|es|ing)|fell|fall|falls|fallen|falling|"
+    r"drop(?:ped|s|ping)?|contract(?:ed|ion)|shrank|shrunk|shrinking|slipped|"
+    r"reduc(?:e|ed|es|tion)|weaken(?:ed)?|deteriorat(?:ed|ion)|halved|tumbl(?:ed|es|ing)|"
+    r"slump(?:ed|ing)?|slid|slide|retreat(?:ed|ing)?|lower\s+than|"
+    r"down\s+from)",
+    re.IGNORECASE,
+)
+# Deliberately a bounded, common-case vocabulary, not exhaustive coverage of
+# every financial-prose synonym for "went up"/"went down" -- a synonym this
+# list misses simply makes _claimed_direction abstain (no direction word
+# recognized -> no check fires), never a false accept. Expand this list if a
+# real narration is observed to use a common synonym not covered here;
+# expanding it is always safe (a wider net can only make the check fire in
+# more cases where a genuine mismatch would otherwise slip through, never
+# the reverse) and never removes an existing pass.
+_FLAT_RE = re.compile(
+    r"(?:flat|unchanged|stable|steady|little\s+changed|in\s+line\s+with)", re.IGNORECASE
+)
+_NEGATION_RE = re.compile(
+    r"(?:not|no|never|nor|without|n't|rather\s+than|instead\s+of)", re.IGNORECASE
+)
+_HEDGE_RE = re.compile(
+    r"(?:may|might|could|would|should|expect(?:s|ed)?|anticipat(?:e|es|ed)|"
+    r"forecast(?:s|ed)?|guidance|outlook|project(?:s|ed|ion)|estimat(?:e|es|ed)|if|"
+    r"assum(?:e|es|ing))",
+    re.IGNORECASE,
+)
+_BASELINE_PREPOSITION_RE = re.compile(
+    r"(?:from|versus|vs\.?|compared\s+(?:with|to)|against|than|prior[- ]year|"
+    r"year\s+earlier)",
+    re.IGNORECASE,
+)
+
+# A year-over-year move smaller than this (relative) is too small for a
+# strong "grew"/"declined" claim to be confidently right or wrong about --
+# each pre-formatted figure already carries up to ~0.5% error from
+# 2-decimal-at-scale rounding, so this is a deliberately wide dead-band.
+_DIRECTION_MIN_RELATIVE_CHANGE = 0.02
+# A "flat"/"unchanged" claim is only contradicted once the move is clearly
+# material, for the same rounding-tolerance reason.
+_FLAT_CLAIM_MAX_RELATIVE_CHANGE = 0.05
+
+
+def _polarity_at(text: str, start: int, end: int) -> str:
+    """Return "-" if the number at ``text[start:end]`` is written as negative, else "+".
+
+    A number is negative when it is immediately preceded by a minus sign
+    (``_NEGATIVE_PREFIX_RE``) or is wrapped in accounting-style parentheses
+    -- unless that parenthesized content is bare digits (e.g. a year like
+    ``"(2024)"``), which is not treated as a negative number.
+
+    Args:
+        text: The full string the number was matched in.
+        start: Start index of the number's match within ``text``.
+        end: End index (exclusive) of the number's match within ``text``.
+
+    Returns:
+        ``"-"`` if the number is written as negative, ``"+"`` otherwise.
+    """
+    if _NEGATIVE_PREFIX_RE.search(text[:start]):
+        return "-"
+    core = text[start:end]
+    wrapped = start > 0 and text[start - 1] == "(" and end < len(text) and text[end] == ")"
+    if wrapped and not _BARE_DIGITS_RE.match(core):
+        return "-"
+    return "+"
+
+
+def _grounded_polarities(token: str, *, figures: Sequence[str], quotes: Sequence[str]) -> set[str]:
+    """Return every polarity ("+"/"-") under which ``token`` occurs as an isolated number.
+
+    Boundary-aware, not plain substring containment: the match must not be
+    immediately preceded by a digit or decimal point, nor immediately
+    followed by a continuing decimal fraction or a magnitude/percent suffix
+    letter -- so a fabricated "1.04" can't match inside the unrelated
+    "$391.04B", and a fabricated "$416" can't match as a truncated prefix of
+    the real "$416.16B".
 
     Args:
         token: A number-like substring extracted from the draft's text.
@@ -289,13 +443,283 @@ def _token_is_grounded(token: str, *, figures: Sequence[str], quotes: Sequence[s
         quotes: The verbatim quote text of every citation in the draft.
 
     Returns:
-        ``True`` if ``token`` occurs as an isolated number in at least one
-        figure or at least one quote, ``False`` otherwise.
+        The set of polarities (a subset of ``{"+", "-"}``) under which
+        ``token`` occurs as an isolated number in ``figures`` or ``quotes``.
     """
-    pattern = re.compile(rf"(?<![\d.]){re.escape(token)}(?![\d])")
-    return any(pattern.search(figure) for figure in figures) or any(
-        pattern.search(quote) for quote in quotes
+    pattern = re.compile(rf"(?<![\d.]){re.escape(token)}(?!\.?\d)(?![%BMKTbmkt])")
+    found: set[str] = set()
+    for haystack in (*figures, *quotes):
+        for match in pattern.finditer(haystack):
+            found.add(_polarity_at(haystack, match.start(), match.end()))
+    return found
+
+
+def _token_is_grounded(
+    token: str, *, polarity: str, figures: Sequence[str], quotes: Sequence[str]
+) -> bool:
+    """Return whether ``token`` is grounded in ``figures``/``quotes`` under ``polarity``.
+
+    Args:
+        token: A number-like substring extracted from the draft's text.
+        polarity: ``"+"`` or ``"-"``, the sign the token was written with.
+        figures: The pre-formatted figure strings supplied to the model.
+        quotes: The verbatim quote text of every citation in the draft.
+
+    Returns:
+        ``True`` if ``token`` occurs as an isolated number under exactly
+        ``polarity`` in at least one figure or quote, ``False`` otherwise.
+    """
+    return polarity in _grounded_polarities(token, figures=figures, quotes=quotes)
+
+
+def _parse_figure_value(body: str) -> float | None:
+    """Parse one figure body such as ``"$391.04B"``, ``"-$1.23B"``, ``"15.55B shares"``.
+
+    Mirrors app/agent/formatting.py's ``format_figure`` in reverse. Returns
+    ``None`` for anything unrecognized (e.g. ``"n/a"``), so callers degrade
+    to "cannot determine" rather than guessing.
+
+    Args:
+        body: One pre-formatted figure string (or the text after its
+            ``"FY<year>: "`` prefix has already been stripped).
+
+    Returns:
+        The parsed numeric value, or ``None`` if ``body`` is not a
+        recognized numeric figure.
+    """
+    body = body.strip()
+    if body.endswith(" shares"):
+        body = body[: -len(" shares")]
+    negative = bool(body) and body[0] in _MINUS_CHARS
+    if negative:
+        body = body[1:].lstrip()
+    if body.startswith("(") and body.endswith(")"):
+        negative, body = True, body[1:-1].strip()
+    match = _FIGURE_BODY_RE.match(body)
+    if match is None or body[match.end() :].strip() not in ("", "%"):
+        return None
+    value = float(match.group(1).replace(",", "")) * _MAGNITUDE_SCALE[match.group(2).upper()]
+    return -value if negative else value
+
+
+def _year_labeled_figures(figures: Sequence[str]) -> list[tuple[int, str]]:
+    """Return the ``(year, original_line)`` pairs among ``figures`` with a ``"FY<year>:"`` prefix.
+
+    Args:
+        figures: The pre-formatted figure strings supplied to the model.
+
+    Returns:
+        One ``(year, figure)`` pair per figure line matching
+        ``_FIGURE_YEAR_RE``, in the order they appear in ``figures``.
+    """
+    result: list[tuple[int, str]] = []
+    for line in figures:
+        match = _FIGURE_YEAR_RE.match(line.strip())
+        if match:
+            result.append((int(match.group(1)), line))
+    return result
+
+
+def _parse_year_series(figures: Sequence[str]) -> dict[int, float]:
+    """Map fiscal year to numeric value; empty when ``figures`` aren't year-labeled or parseable.
+
+    Deliberately returns ``{}`` (disabling the direction check entirely) on
+    any contradiction (the same year appearing twice with different values)
+    or on fewer than the two data points a comparison needs -- see
+    :func:`_check_direction_claims`.
+
+    Args:
+        figures: The pre-formatted figure strings supplied to the model.
+
+    Returns:
+        A mapping of fiscal year to parsed numeric value.
+    """
+    series: dict[int, float] = {}
+    for year, figure in _year_labeled_figures(figures):
+        match = _FIGURE_YEAR_RE.match(figure.strip())
+        assert match is not None  # narrowed by _year_labeled_figures's own match
+        value = _parse_figure_value(match.group(2))
+        if value is None:
+            continue
+        if year in series and series[year] != value:
+            return {}
+        series[year] = value
+    return series
+
+
+def _claimed_direction(clause: str) -> str | None:
+    """Return the single unambiguous direction ("up"/"down"/"flat") asserted, or ``None``.
+
+    Abstains (returns ``None``) on any negation or hedge, and on zero or on
+    more than one direction category appearing in the same clause --
+    "cannot determine -> pass" is the default in every branch.
+
+    Args:
+        clause: One clause of the draft's commentary text.
+
+    Returns:
+        ``"up"``, ``"down"``, ``"flat"``, or ``None`` if no single
+        direction is unambiguously asserted.
+    """
+    if _NEGATION_RE.search(clause) or _HEDGE_RE.search(clause):
+        return None
+    hits: set[str] = set()
+    if _INCREASE_RE.search(clause):
+        hits.add("up")
+    if _DECREASE_RE.search(clause):
+        hits.add("down")
+    if _FLAT_RE.search(clause):
+        hits.add("flat")
+    return hits.pop() if len(hits) == 1 else None
+
+
+def _anchored_years(clause: str, year_figures: Sequence[tuple[int, str]]) -> set[int]:
+    """Return the fiscal years this clause demonstrably talks about.
+
+    A year is anchored only when some number token IN THIS CLAUSE matches
+    that year's own figure string under the same boundary- and
+    polarity-aware rule used for grounding -- this is the subject gate that
+    keeps a direction word about a different metric ("net sales increased
+    6%" while narrating a different line item) from being attributed to
+    this line item's series: no anchor, no direction check.
+
+    Args:
+        clause: One clause of the draft's commentary text.
+        year_figures: The ``(year, figure)`` pairs from
+            :func:`_year_labeled_figures`.
+
+    Returns:
+        The set of fiscal years anchored in ``clause``.
+    """
+    years: set[int] = set()
+    for match in _NUMBER_TOKEN_RE.finditer(clause):
+        token = match.group(0)
+        polarity = _polarity_at(clause, match.start(), match.end())
+        pattern = re.compile(rf"(?<![\d.]){re.escape(token)}(?!\.?\d)(?![%BMKTbmkt])")
+        for year, figure in year_figures:
+            if any(
+                _polarity_at(figure, m.start(), m.end()) == polarity
+                for m in pattern.finditer(figure)
+            ):
+                years.add(year)
+    return years
+
+
+_CLAIM_PHRASES = {"up": "an increase", "down": "a decrease", "flat": "essentially unchanged"}
+
+# Every error message below is built exclusively from our own fixed
+# vocabulary, our own parsed year integers, and our own pre-formatted
+# figure strings -- never from the model's free text -- so, unlike a
+# validation-error message that embeds raw model/JSON input, none of these
+# need _neutralize_delimiters (SECURITY.md item 3): there is no
+# model-authored substring in them to smuggle a forged delimiter through.
+_SIGN_ERRORS = {
+    "+": (
+        "Your previous response's text mentioned {token} as a positive value, but "
+        "the given figures and your cited quotes contain that number only as a "
+        "negative value. Reproduce the figure exactly as it was given to you, "
+        "including its leading minus sign."
+    ),
+    "-": (
+        "Your previous response's text mentioned {token} as a negative value, but "
+        "the given figures and your cited quotes contain that number only as a "
+        "positive value. Reproduce the figure exactly as it was given to you, "
+        "without adding a minus sign."
+    ),
+}
+
+
+def _direction_error(claim: str, earlier: int, later: int, figure_body: dict[int, str]) -> str:
+    """Build the retry-prompt error for a direction claim the figures contradict.
+
+    Args:
+        claim: The claimed direction, ``"up"``, ``"down"``, or ``"flat"``.
+        earlier: The earlier fiscal year of the comparison.
+        later: The later fiscal year of the comparison.
+        figure_body: Fiscal year to its own pre-formatted figure body (the
+            text after the ``"FY<year>: "`` prefix).
+
+    Returns:
+        A retry-prompt error string naming only our own figures and years.
+    """
+    contradiction = "a material change" if claim == "flat" else "the change in the other direction"
+    return (
+        f"Your previous response's text described FY{later} as "
+        f"{_CLAIM_PHRASES[claim]} compared with FY{earlier}, but the given figures "
+        f"show {contradiction}: FY{earlier} is {figure_body[earlier]} and FY{later} "
+        f"is {figure_body[later]}. Describe the change in the direction the figures "
+        "actually show, or do not describe a change at all."
     )
+
+
+def _check_direction_claims(text: str, *, figures: Sequence[str]) -> str:
+    """Return ``""`` unless some clause in ``text`` asserts a change the figures contradict.
+
+    Splits ``text`` into clauses (so a direction word about one metric never
+    contaminates a different metric mentioned elsewhere in the same
+    sentence), and for each clause: determines the single claimed direction
+    (abstaining on negation/hedge/ambiguity), the fiscal year(s) it's
+    anchored to via a number that matches this line item's own figures
+    (abstaining if none), and the year pair to compare (abstaining if a
+    single anchored year has an explicit baseline preposition like
+    "from"/"versus" pointing at a year we can't identify). Movements inside
+    a rounding dead-band are treated as unable to support a strong
+    direction claim and are skipped rather than flagged. Abstains entirely
+    (returns ``""``) whenever ``figures`` doesn't carry at least two
+    year-labeled, parseable data points.
+
+    Args:
+        text: The draft's commentary text.
+        figures: The pre-formatted figure strings supplied to the model.
+
+    Returns:
+        ``""`` if no clause contradicts the figures, else a retry-prompt
+        error message from :func:`_direction_error`.
+    """
+    series = _parse_year_series(figures)
+    if len(series) < 2:
+        return ""
+    year_figures = _year_labeled_figures(figures)
+    figure_body: dict[int, str] = {}
+    for year, figure in year_figures:
+        match = _FIGURE_YEAR_RE.match(figure.strip())
+        assert match is not None
+        figure_body[year] = match.group(2)
+
+    for clause in _CLAUSE_SPLIT_RE.split(text):
+        if not clause.strip():
+            continue
+        claim = _claimed_direction(clause)
+        if claim is None:
+            continue
+        years = _anchored_years(clause, year_figures)
+        if not years:
+            continue
+        if len(years) >= 2:
+            earlier, later = min(years), max(years)
+        else:
+            if _BASELINE_PREPOSITION_RE.search(clause):
+                continue
+            later = next(iter(years))
+            prior = [year for year in series if year < later]
+            if not prior:
+                continue
+            earlier = max(prior)
+
+        before, after = series[earlier], series[later]
+        if before <= 0 or after <= 0:
+            continue
+        relative = (after - before) / before
+
+        if claim == "flat":
+            if abs(relative) > _FLAT_CLAIM_MAX_RELATIVE_CHANGE:
+                return _direction_error(claim, earlier, later, figure_body)
+            continue
+        if abs(relative) <= _DIRECTION_MIN_RELATIVE_CHANGE:
+            continue
+        if ("up" if relative > 0 else "down") != claim:
+            return _direction_error(claim, earlier, later, figure_body)
+    return ""
 
 
 def _validate_draft(
@@ -324,7 +748,16 @@ def _validate_draft(
         ``settings.max_citation_quote_chars`` characters long;
     (d) every number-like token in ``text`` (see :data:`_NUMBER_TOKEN_RE`)
         also appears, as an isolated number, in ``figures`` or in one of
-        the draft's own cited quotes (see :func:`_token_is_grounded`).
+        the draft's own cited quotes, under the SAME polarity (sign) it
+        was written with in ``text`` (see :func:`_grounded_polarities`) --
+        a positive claim does not ground against a figure that is only
+        ever given as negative, or vice versa. Afterward, a separate
+        direction-of-change check (see :func:`_check_direction_claims`)
+        rejects any clause whose asserted direction ("grew", "declined",
+        "unchanged") contradicts the year-over-year figures it is
+        demonstrably anchored to; it abstains whenever fewer than two
+        year-labeled figures are parseable, on negation/hedge/ambiguity, or
+        on a movement inside a rounding dead-band.
 
     Per-citation validation failures identify the offending citation by its
     1-based position (e.g. "citation #2") rather than by echoing its raw,
@@ -403,13 +836,21 @@ def _validate_draft(
 
     if draft.text:
         quotes = [citation.quote for citation in draft.citations]
-        for token in _NUMBER_TOKEN_RE.findall(draft.text):
-            if not _token_is_grounded(token, figures=figures, quotes=quotes):
+        for match in _NUMBER_TOKEN_RE.finditer(draft.text):
+            token = match.group(0)
+            polarity = _polarity_at(draft.text, match.start(), match.end())
+            found = _grounded_polarities(token, figures=figures, quotes=quotes)
+            if not found:
                 return None, (
                     f"Your previous response's text mentioned {token!r}, which does "
                     "not appear in the given figures or in any of your cited quotes. "
                     "Every number must come from the given figures or a cited quote."
                 )
+            if polarity not in found:
+                return None, _SIGN_ERRORS[polarity].format(token=repr(token))
+        direction_error = _check_direction_claims(draft.text, figures=figures)
+        if direction_error:
+            return None, direction_error
 
     return draft, ""
 
