@@ -1,0 +1,33 @@
+# Secrets — never baked into an image (SECURITY.md item 6).
+.env
+.env.*
+!.env.example
+
+# Runtime data (cache, generated workbooks, vector store, run log).
+data/
+*.xlsx
+runs.db
+
+# VCS / CI
+.git/
+.github/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Local plan/agent scaffolding, not part of the app.
+.claude/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+
+# Docs not needed at runtime.
+docs/
+evals/
