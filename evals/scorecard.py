@@ -59,7 +59,7 @@ def _git_sha() -> str:
     return result.stdout.strip() or "unknown"
 
 
-def build_scorecard(*, skip_judge: bool = False) -> dict[str, Any]:
+def build_scorecard(*, skip_judge: bool = False, judge_only: bool = False) -> dict[str, Any]:
     """Run every eval and assemble one scorecard dict.
 
     Runs `evals.tieout_eval.run()` and `evals.retrieval_eval.run()`
@@ -74,7 +74,15 @@ def build_scorecard(*, skip_judge: bool = False) -> dict[str, Any]:
             Anthropic API call is made) and record a
             `{"status": "skipped", "reason": "--skip-judge passed"}` judge
             section instead. Use this to verify the rest of the scorecard
-            pipeline without spending API money.
+            pipeline without spending API money. Mutually exclusive with
+            `judge_only` (the caller -- `main()` -- enforces this; this
+            function itself just checks `skip_judge` first).
+        judge_only: If `True`, call `evals.judge.run(use_saved_generation=True)`
+            instead of a normal `evals.judge.run()` -- re-grades the
+            samples already persisted in `evals/generation_samples.json`
+            (see `evals.judge.generate_samples`) without narrating again,
+            spending judge API money only. Raises `FileNotFoundError` (from
+            `evals.judge.run`) if no such file exists yet.
 
     Returns:
         A dict shaped:
@@ -91,7 +99,9 @@ def build_scorecard(*, skip_judge: bool = False) -> dict[str, Any]:
     tieout_result = tieout_eval.run()
     retrieval_result = retrieval_eval.run()
     judge_result: dict[str, Any] = (
-        {"status": "skipped", "reason": "--skip-judge passed"} if skip_judge else judge.run()
+        {"status": "skipped", "reason": "--skip-judge passed"}
+        if skip_judge
+        else judge.run(use_saved_generation=judge_only)
     )
 
     return {
@@ -106,6 +116,18 @@ def build_scorecard(*, skip_judge: bool = False) -> dict[str, Any]:
 def _format_pct(value: float | None) -> str:
     """Format a `0..1` float as a percentage string, or `"n/a"` if `None`."""
     return f"{value:.1%}" if value is not None else "n/a"
+
+
+def _format_count_pct(hits: int, total: int) -> str:
+    """Format `"hits/total (pct%)"`, or `"n/a (0/0)"` if `total` is zero.
+
+    A raw fraction sits right next to every percentage it summarizes --
+    "9/13" reads more honestly than "69.2%" alone, especially at the small
+    sample sizes this eval runs at.
+    """
+    if total == 0:
+        return "n/a (0/0)"
+    return f"{hits}/{total} ({hits / total:.1%})"
 
 
 def _render_tieout_section(tieout: dict[str, Any]) -> list[str]:
@@ -204,8 +226,11 @@ def _render_judge_section(judge_result: dict[str, Any]) -> list[str]:
     """Render the LLM-as-judge portion of the scorecard as markdown lines.
 
     Reports `grounded`/`cited`/`no_invented_numbers` as three separate
-    rates (never one blended vibe score), or a single clearly-worded
-    skip line when `judge_result["status"] == "skipped"`.
+    rates (never one blended vibe score), each shown as a raw
+    `hits/n_judged` fraction alongside its percentage -- deliberately, at
+    this eval's small sample sizes ("9/13" is more honest than "69.2%"
+    alone) -- or a single clearly-worded skip line when
+    `judge_result["status"] == "skipped"`.
 
     Args:
         judge_result: `evals.judge.run()`'s return value, or the
@@ -225,12 +250,13 @@ def _render_judge_section(judge_result: dict[str, Any]) -> list[str]:
         "(deliberately a different model)."
     )
     lines.append("")
-    lines.append("| Criterion | Rate |")
+    n_judged = judge_result["n_judged"]
+    lines.append("| Criterion | Result |")
     lines.append("| --- | --- |")
-    lines.append(f"| Grounded | {_format_pct(judge_result['grounded_rate'])} |")
-    lines.append(f"| Cited | {_format_pct(judge_result['cited_rate'])} |")
-    no_invented_pct = _format_pct(judge_result["no_invented_numbers_rate"])
-    lines.append(f"| No invented numbers | {no_invented_pct} |")
+    lines.append(f"| Grounded | {_format_count_pct(judge_result['grounded_hits'], n_judged)} |")
+    lines.append(f"| Cited | {_format_count_pct(judge_result['cited_hits'], n_judged)} |")
+    no_invented = _format_count_pct(judge_result["no_invented_numbers_hits"], n_judged)
+    lines.append(f"| No invented numbers | {no_invented} |")
     lines.append("")
     tickers_run = ", ".join(judge_result["tickers_run"]) or "(none)"
     lines.append(
@@ -335,23 +361,35 @@ def write_readme_section(markdown_table: str, readme_path: Path = _README_PATH) 
 def main() -> None:
     """CLI entry point: run every eval, write the scorecard, update the README.
 
-    Parses a single optional `--skip-judge` flag, calls `build_scorecard()`,
-    writes `evals/scorecard.json` (`json.dumps(..., indent=2)` plus a
-    trailing newline), renders and writes the README scorecard section, and
-    prints a short human-readable summary (git sha, tie-out accuracy,
-    whether the judge ran or was skipped and why).
+    Parses `--skip-judge` and `--judge-only` (mutually exclusive -- argparse
+    itself rejects passing both), calls `build_scorecard()`, writes
+    `evals/scorecard.json` (`json.dumps(..., indent=2)` plus a trailing
+    newline), renders and writes the README scorecard section, and prints a
+    short human-readable summary (git sha, tie-out accuracy, whether the
+    judge ran or was skipped and why).
     """
     parser = argparse.ArgumentParser(
         description="Run the tieout eval layer and produce evals/scorecard.json."
     )
-    parser.add_argument(
+    judge_group = parser.add_mutually_exclusive_group()
+    judge_group.add_argument(
         "--skip-judge",
         action="store_true",
         help="Skip the LLM-as-judge eval (no Anthropic API call, no API money spent).",
     )
+    judge_group.add_argument(
+        "--judge-only",
+        action="store_true",
+        help=(
+            "Re-grade the samples already persisted in evals/generation_samples.json "
+            "(see evals.judge.generate_samples) instead of narrating again -- no "
+            "generator API spend, judge API spend only. Fails loudly if no saved "
+            "samples exist yet (run once without this flag first)."
+        ),
+    )
     args = parser.parse_args()
 
-    scorecard = build_scorecard(skip_judge=args.skip_judge)
+    scorecard = build_scorecard(skip_judge=args.skip_judge, judge_only=args.judge_only)
 
     _SCORECARD_PATH.write_text(json.dumps(scorecard, indent=2) + "\n", encoding="utf-8")
 

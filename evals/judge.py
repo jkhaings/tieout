@@ -60,7 +60,7 @@ from app.rag import (
     narrate_line_item,
     parse_filing,
 )
-from app.schemas import Chunk, Commentary
+from app.schemas import Chunk, Citation, Commentary
 from app.settings import get_app_settings
 
 if TYPE_CHECKING:
@@ -93,6 +93,17 @@ _AAPL_SUBMISSIONS = _FIXTURES_DIR / "submissions_AAPL.json"
 _MSFT_FILING_HTML = _CORPUS_DIR / "msft_10k_excerpt.html"
 _MSFT_COMPANY_FACTS = _FIXTURES_DIR / "companyfacts_MSFT.json"
 _MSFT_SUBMISSIONS = _FIXTURES_DIR / "submissions_MSFT.json"
+
+# Persisted per-sample generation artifact (see generate_samples()/run()):
+# every figure, every retrieved chunk (full text, not just its id), and the
+# generator's own commentary text/citations for each narrated line item.
+# Committed to the repo like evals/scorecard.json -- it is what lets a
+# judge-only rerun (run(use_saved_generation=True)) re-grade the exact same
+# commentaries without spending any further generation API money, and what
+# lets a human inspect precisely what the judge saw for any sample flagged
+# in the scorecard (evals/scorecard.py's own "details" stay lean; this file
+# is the full evidence trail).
+_GENERATION_SAMPLES_PATH = Path(__file__).resolve().parent / "generation_samples.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -550,70 +561,71 @@ class AnthropicJudge:
         )
 
 
-def run() -> dict[str, Any]:
-    """Narrate real commentary with the real generator, then grade it with the real judge.
+def _explicit_key_anthropic_client() -> anthropic.Anthropic:
+    """Build a real ``anthropic.Anthropic`` client reading the key from ``.env`` via settings.
+
+    app/rag deliberately never loads ``.env`` itself (its module docstring
+    says so): ``AnthropicNarrator``/``AnthropicJudge``'s own default client
+    construction is a bare ``anthropic.Anthropic()``, which resolves
+    credentials from the OS environment only, not from ``AppSettings``'
+    pydantic-settings ``.env`` parsing. Mirrors ``app/agent/runner.py``'s
+    ``_build_narrator`` -- build an explicit-key client here, the one place
+    that *does* read ``.env``, instead of relying on ambient env resolution
+    that would silently fail whenever ``ANTHROPIC_API_KEY`` lives only in
+    ``.env`` and not the shell's own environment (as it does for most local
+    dev setups -- CLAUDE.md rule 6 keeps secrets out of the repo, not out of
+    ``.env``).
+
+    Returns:
+        A real ``anthropic.Anthropic`` client, keyed from
+        ``AppSettings().anthropic_api_key``. Callers must check
+        ``anthropic_configured`` first; this raises if the key is empty.
+    """
+    import anthropic
+
+    api_key = get_app_settings().anthropic_api_key.get_secret_value()
+    return anthropic.Anthropic(api_key=api_key)
+
+
+def generate_samples() -> dict[str, Any]:
+    """Narrate every commentary sample with the REAL generator; the expensive half of ``run``.
 
     Narrates every ``app.agent.formatting.COMMENTARY_LINE_ITEMS`` x ticker
     pair using the REAL generator (:class:`~app.rag.AnthropicNarrator`,
     ``narration_model`` from ``RagSettings()``), built from real fixtures:
-    ``tests/fixtures/aapl_10k_excerpt.html`` via :func:`~app.rag.parse_filing`
-    plus a BM25-only :class:`~app.rag.Retriever` for AAPL, and the same for
-    MSFT using ``evals/datasets/corpus/msft_10k_excerpt.html`` if that file
-    exists (checked at call time, never assumed), else MSFT is skipped and
-    the reason is recorded in the returned dict's ``tickers_skipped``.
+    ``tests/fixtures/aapl_10k_excerpt.html`` via
+    :func:`~app.rag.parse_filing` plus a BM25-only
+    :class:`~app.rag.Retriever` for AAPL, and the same for MSFT using
+    ``evals/datasets/corpus/msft_10k_excerpt.html`` if that file exists
+    (checked at call time, never assumed), else MSFT is skipped and the
+    reason is recorded in the returned dict's ``tickers_skipped``.
 
-    For every successfully-narrated commentary (``text is not None``), the
-    real judge (:class:`AnthropicJudge`) scores it against the exact figures
-    and chunks the generator was given. Returns per-criterion rates across
-    everything judged -- ``grounded_rate``, ``cited_rate``,
-    ``no_invented_numbers_rate`` -- as separate numbers, never one blended
-    score.
+    Deliberately returns a fully JSON-serializable dict rather than
+    :class:`_NarratedItem` objects, and does no judging itself: this is
+    the half of the eval that spends *generator* API money and is
+    inherently non-deterministic (an LLM call), so its result is meant to
+    be persisted (see :func:`run`, :data:`_GENERATION_SAMPLES_PATH`) and
+    re-judged later via :func:`judge_samples` without narrating again.
 
-    If ``app.settings.get_app_settings().anthropic_configured`` is
-    ``False``, returns ``{"status": "skipped", "reason": "ANTHROPIC_API_KEY
-    not configured"}`` immediately, without attempting any call and without
-    raising -- a graceful, documented skip ``evals/scorecard.py`` can handle
-    cleanly.
+    Callers must check ``app.settings.get_app_settings().anthropic_configured``
+    first (see :func:`run`) -- this raises rather than skipping quietly,
+    since a caller reaching this function has already committed to
+    spending generation money.
 
     Returns:
-        On skip: ``{"status": "skipped", "reason": str}``.
-
-        On a real run: a dict with ``"status": "ok"``, ``"generator_model"``,
-        ``"judge_model"``, ``"tickers_run"`` (list of tickers actually
-        narrated), ``"tickers_skipped"`` (ticker -> reason, may be empty),
-        ``"n_narrated"`` (count of commentaries with ``text is not None``),
-        ``"n_judged"`` (count that got a valid judge verdict), ``
-        "grounded_rate"``/``"cited_rate"``/``"no_invented_numbers_rate"``
-        (each ``hits / n_judged``, or ``None`` if ``n_judged == 0`` --
-        never fabricated as ``0.0``), and ``"details"``, a list of one dict
-        per narrated line item (ticker, line_item_key, narrated commentary
-        text/citations, and, when judged, the per-criterion verdict and any
-        ``judge_error``).
+        ``{"tickers_run": [...], "tickers_skipped": {...}, "samples":
+        [...]}``, where each sample dict has ``ticker``, ``line_item_key``,
+        ``label``, ``figures`` (``list[str]``), ``chunks`` (list of
+        ``{"chunk_id", "section", "text", "source_url"}``),
+        ``commentary_text``, and ``citations`` (list of
+        ``{"chunk_id", "quote"}``) -- everything :func:`judge_samples`
+        needs to grade the commentary later without re-narrating.
     """
-    app_settings = get_app_settings()
-    if not app_settings.anthropic_configured:
-        return {"status": "skipped", "reason": "ANTHROPIC_API_KEY not configured"}
-
-    # app/rag deliberately never loads .env itself (its module docstring
-    # says so): AnthropicNarrator/AnthropicJudge's own default client
-    # construction is a bare anthropic.Anthropic(), which resolves
-    # credentials from the OS environment only, not from AppSettings'
-    # pydantic-settings .env parsing. Mirror app/agent/runner.py's
-    # _build_narrator -- build an explicit-key client here, the one place
-    # that *does* read .env, instead of relying on ambient env resolution
-    # that would silently fail whenever ANTHROPIC_API_KEY lives only in
-    # .env and not the shell's own environment (as it does for most local
-    # dev setups -- CLAUDE.md rule 6 keeps secrets out of the repo, not out
-    # of .env).
-    import anthropic
-
-    api_key = app_settings.anthropic_api_key.get_secret_value()
-    rag_settings = RagSettings()
     generator = AnthropicNarrator(
-        model=rag_settings.narration_model,
-        client=anthropic.Anthropic(api_key=api_key),
+        model=RagSettings().narration_model,
+        client=_explicit_key_anthropic_client(),
     )
-    judge = AnthropicJudge(client=anthropic.Anthropic(api_key=api_key))
+    rag_settings = RagSettings()
 
     narrated_items: list[_NarratedItem] = []
     tickers_run: list[str] = []
@@ -654,6 +666,83 @@ def run() -> dict[str, Any]:
     else:
         tickers_skipped["MSFT"] = f"{_MSFT_FILING_HTML} not found; skipping MSFT"
 
+    samples = [
+        {
+            "ticker": item.ticker,
+            "line_item_key": item.line_item_key,
+            "label": item.label,
+            "figures": item.figures,
+            "chunks": [
+                {
+                    "chunk_id": chunk.chunk_id,
+                    "section": chunk.section,
+                    "text": chunk.text,
+                    "source_url": chunk.source_url,
+                }
+                for chunk in item.chunks
+            ],
+            "commentary_text": item.commentary.text,
+            "citations": [citation.model_dump() for citation in item.commentary.citations],
+        }
+        for item in narrated_items
+    ]
+
+    return {"tickers_run": tickers_run, "tickers_skipped": tickers_skipped, "samples": samples}
+
+
+def judge_samples(
+    samples: Sequence[dict[str, Any]],
+    *,
+    tickers_run: Sequence[str],
+    tickers_skipped: dict[str, str],
+) -> dict[str, Any]:
+    """Grade already-generated samples with the REAL judge; makes no generator API calls.
+
+    Reconstructs each sample's :class:`~app.schemas.Chunk`/
+    :class:`~app.schemas.Commentary` objects from the plain dicts
+    :func:`generate_samples` produces (or a persisted copy of them, see
+    :data:`_GENERATION_SAMPLES_PATH`), then judges each one exactly as a
+    single combined narrate-then-judge pass would -- this is the piece
+    that is safe, and cheap, to re-run on its own: it spends *judge* API
+    money only, never generator API money, so re-judging the same frozen
+    samples (e.g. after a judge-prompt tweak) never re-narrates.
+
+    Args:
+        samples: The ``"samples"`` list from :func:`generate_samples`'s
+            (or a loaded, persisted copy of its) return value.
+        tickers_run: The ``"tickers_run"`` list from that same generation
+            result, passed through unchanged into this function's result.
+        tickers_skipped: The ``"tickers_skipped"`` dict from that same
+            generation result, passed through unchanged into this
+            function's result.
+
+    Returns:
+        On skip: ``{"status": "skipped", "reason": str}`` if
+        ``anthropic_configured`` is ``False`` (judging still needs a real
+        key even though generation already happened).
+
+        On a real run: a dict with ``"status": "ok"``, ``"generator_model"``,
+        ``"judge_model"``, ``"tickers_run"``, ``"tickers_skipped"``,
+        ``"n_narrated"`` (count of samples with ``commentary_text`` not
+        ``None``), ``"n_judged"`` (count that got a valid judge verdict),
+        ``"grounded_hits"``/``"cited_hits"``/``"no_invented_numbers_hits"``
+        (the raw integer counts each rate below is computed from -- shown
+        explicitly, not left for a caller to reverse-engineer from a
+        rounded float, so a report can say "9/13" rather than only "69.2%"),
+        ``"grounded_rate"``/``"cited_rate"``/``"no_invented_numbers_rate"``
+        (each ``hits / n_judged``, or ``None`` if ``n_judged == 0`` --
+        never fabricated as ``0.0``), and ``"details"``, a list of one
+        dict per sample (ticker, line_item_key, commentary text/citations,
+        and, when judged, the per-criterion verdict and any
+        ``judge_error``).
+    """
+    app_settings = get_app_settings()
+    if not app_settings.anthropic_configured:
+        return {"status": "skipped", "reason": "ANTHROPIC_API_KEY not configured"}
+
+    judge = AnthropicJudge(client=_explicit_key_anthropic_client())
+    rag_settings = RagSettings()
+
     details: list[dict[str, Any]] = []
     n_narrated = 0
     n_judged = 0
@@ -661,13 +750,15 @@ def run() -> dict[str, Any]:
     cited_hits = 0
     no_invented_hits = 0
 
-    for narrated in narrated_items:
+    for sample in samples:
+        commentary_text: str | None = sample["commentary_text"]
+        citations = [Citation(**citation) for citation in sample["citations"]]
         detail: dict[str, Any] = {
-            "ticker": narrated.ticker,
-            "line_item_key": narrated.line_item_key,
-            "narrated": narrated.commentary.text is not None,
-            "commentary_text": narrated.commentary.text,
-            "citations": [citation.model_dump() for citation in narrated.commentary.citations],
+            "ticker": sample["ticker"],
+            "line_item_key": sample["line_item_key"],
+            "narrated": commentary_text is not None,
+            "commentary_text": commentary_text,
+            "citations": [citation.model_dump() for citation in citations],
             "judged": False,
             "grounded": None,
             "cited": None,
@@ -675,23 +766,28 @@ def run() -> dict[str, Any]:
             "notes": "",
             "judge_error": None,
         }
-        if narrated.commentary.text is None:
+        if commentary_text is None:
             details.append(detail)
             continue
         n_narrated += 1
 
+        commentary = Commentary(
+            line_item_key=sample["line_item_key"], text=commentary_text, citations=citations
+        )
+        chunks = [Chunk(**chunk) for chunk in sample["chunks"]]
+
         try:
             verdict, error = judge.judge(
-                label=narrated.label,
-                figures=narrated.figures,
-                chunks=narrated.chunks,
-                commentary=narrated.commentary,
+                label=sample["label"],
+                figures=sample["figures"],
+                chunks=chunks,
+                commentary=commentary,
             )
         except Exception as exc:  # noqa: BLE001 - a live API/transport error, never fabricate
             logger.warning(
                 "judge call failed for %s/%s: %s",
-                narrated.ticker,
-                narrated.line_item_key,
+                sample["ticker"],
+                sample["line_item_key"],
                 exc,
                 exc_info=True,
             )
@@ -725,10 +821,13 @@ def run() -> dict[str, Any]:
         "status": "ok",
         "generator_model": rag_settings.narration_model,
         "judge_model": _JUDGE_MODEL,
-        "tickers_run": tickers_run,
-        "tickers_skipped": tickers_skipped,
+        "tickers_run": list(tickers_run),
+        "tickers_skipped": dict(tickers_skipped),
         "n_narrated": n_narrated,
         "n_judged": n_judged,
+        "grounded_hits": grounded_hits,
+        "cited_hits": cited_hits,
+        "no_invented_numbers_hits": no_invented_hits,
         "grounded_rate": _rate(grounded_hits),
         "cited_rate": _rate(cited_hits),
         "no_invented_numbers_rate": _rate(no_invented_hits),
@@ -736,5 +835,79 @@ def run() -> dict[str, Any]:
     }
 
 
+def run(*, use_saved_generation: bool = False) -> dict[str, Any]:
+    """Narrate real commentary with the real generator, then grade it with the real judge.
+
+    Composes :func:`generate_samples` (or a saved copy of its output, see
+    ``use_saved_generation``) with :func:`judge_samples`. Every successful
+    generation run persists its full samples to
+    :data:`_GENERATION_SAMPLES_PATH` (committed to the repo, like
+    ``evals/scorecard.json``) -- "evals must persist inputs/outputs per
+    sample" -- so a later call can re-judge those exact same commentaries
+    (``use_saved_generation=True``) without spending any further generator
+    API money, e.g. after tweaking the judge prompt or investigating a
+    specific flagged sample.
+
+    If ``app.settings.get_app_settings().anthropic_configured`` is
+    ``False``, returns ``{"status": "skipped", "reason": "ANTHROPIC_API_KEY
+    not configured"}`` immediately, without attempting any call and
+    without raising -- a graceful, documented skip ``evals/scorecard.py``
+    can handle cleanly. This check runs regardless of
+    ``use_saved_generation``: judging alone still needs a real key.
+
+    Args:
+        use_saved_generation: If ``True``, skip narration entirely and
+            re-judge the samples already persisted in
+            :data:`_GENERATION_SAMPLES_PATH` -- no generation API spend.
+            Raises if no saved samples exist yet; this never silently
+            falls back to live (paid) generation.
+
+    Returns:
+        See :func:`judge_samples`'s ``Returns`` section -- this function
+        returns exactly what that one does.
+
+    Raises:
+        FileNotFoundError: If ``use_saved_generation`` is ``True`` but
+            :data:`_GENERATION_SAMPLES_PATH` does not exist yet.
+    """
+    app_settings = get_app_settings()
+    if not app_settings.anthropic_configured:
+        return {"status": "skipped", "reason": "ANTHROPIC_API_KEY not configured"}
+
+    if use_saved_generation:
+        if not _GENERATION_SAMPLES_PATH.exists():
+            raise FileNotFoundError(
+                f"{_GENERATION_SAMPLES_PATH} does not exist -- run generate_samples() "
+                "(or run() with use_saved_generation=False) at least once before "
+                "requesting a judge-only rerun. Refusing to silently fall back to "
+                "live generation, which use_saved_generation=True is meant to avoid."
+            )
+        generation = json.loads(_GENERATION_SAMPLES_PATH.read_text(encoding="utf-8"))
+    else:
+        generation = generate_samples()
+        _GENERATION_SAMPLES_PATH.write_text(
+            json.dumps(generation, indent=2) + "\n", encoding="utf-8"
+        )
+
+    return judge_samples(
+        generation["samples"],
+        tickers_run=generation["tickers_run"],
+        tickers_skipped=generation["tickers_skipped"],
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover - manual/local debugging entry point
-    print(json.dumps(run(), indent=2, default=str))
+    import argparse
+
+    _parser = argparse.ArgumentParser(description="Run the tieout LLM-as-judge eval.")
+    _parser.add_argument(
+        "--judge-only",
+        action="store_true",
+        help=(
+            "Re-judge the samples already persisted in generation_samples.json "
+            "instead of narrating again -- no generator API spend, judge API "
+            "spend only. Fails loudly if no saved samples exist yet."
+        ),
+    )
+    _args = _parser.parse_args()
+    print(json.dumps(run(use_saved_generation=_args.judge_only), indent=2, default=str))

@@ -19,6 +19,7 @@ from __future__ import annotations
 import json
 from collections import deque
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -26,7 +27,7 @@ import pytest
 from app.schemas import Chunk, Citation, Commentary
 from app.settings import RagSettings
 from evals import judge as judge_module
-from evals.judge import AnthropicJudge, JudgeVerdict, _parse_verdict, run
+from evals.judge import AnthropicJudge, JudgeVerdict, _parse_verdict, judge_samples, run
 
 _SOURCE_URL = "https://www.sec.gov/Archives/edgar/data/0000320193/example.htm"
 
@@ -197,3 +198,176 @@ def test_run_skips_without_raising_when_anthropic_not_configured(
     result = run()
 
     assert result == {"status": "skipped", "reason": "ANTHROPIC_API_KEY not configured"}
+
+
+class _Configured:
+    """Stand-in ``AppSettings`` with a "key present" reading, for tests below the skip check.
+
+    Hermeticity (CLAUDE.md rule 7): without this, ``anthropic_configured``
+    would fall through to the REAL ``get_app_settings()``, making these
+    tests' behavior depend on whether a real key happens to be sitting in
+    the local ``.env`` -- exactly what must never happen. Every test past
+    the skip check installs this via ``monkeypatch`` and separately fakes
+    ``_explicit_key_anthropic_client`` (never letting the real one, which
+    also reads ``get_app_settings()``, run at all).
+    """
+
+    anthropic_configured = True
+
+
+_SAMPLE: dict[str, Any] = {
+    "ticker": "AAPL",
+    "line_item_key": "revenue",
+    "label": "Revenue",
+    "figures": ["FY2024: $391.04B"],
+    "chunks": [
+        {
+            "chunk_id": _CHUNK.chunk_id,
+            "section": _CHUNK.section,
+            "text": _CHUNK.text,
+            "source_url": _CHUNK.source_url,
+        }
+    ],
+    "commentary_text": "Revenue rose to $391.04B.",
+    "citations": [{"chunk_id": _CHUNK.chunk_id, "quote": "Revenue increased to $391.04B"}],
+}
+
+_REFUSED_SAMPLE: dict[str, Any] = {
+    "ticker": "AAPL",
+    "line_item_key": "total_liabilities",
+    "label": "Total liabilities",
+    "figures": [],
+    "chunks": [],
+    "commentary_text": None,
+    "citations": [],
+}
+
+
+def test_judge_samples_grades_plain_sample_dicts_without_any_generation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """judge_samples() reconstructs Chunk/Commentary from plain dicts and grades them.
+
+    This is the per-sample-artifact contract judge_samples()/generate_samples()
+    exist to satisfy: a caller (a saved generation_samples.json, in
+    production) hands over JSON-serializable sample dicts -- never
+    Chunk/Commentary objects -- and gets back exactly the same rate-summary
+    shape a combined narrate-then-judge run would produce, with zero
+    AnthropicNarrator construction anywhere in this path.
+    """
+
+    def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("judge_samples must never construct a narrator")
+
+    monkeypatch.setattr(judge_module, "get_app_settings", lambda: _Configured())
+    monkeypatch.setattr(judge_module, "AnthropicNarrator", _explode)
+    fake_client = _FakeAnthropic(
+        responses=[
+            _verdict_json(
+                grounded=True, cited=True, no_invented_numbers=True, notes="Fully grounded."
+            )
+        ]
+    )
+    monkeypatch.setattr(judge_module, "_explicit_key_anthropic_client", lambda: fake_client)
+
+    result = judge_samples([_SAMPLE, _REFUSED_SAMPLE], tickers_run=["AAPL"], tickers_skipped={})
+
+    assert result["status"] == "ok"
+    assert result["n_narrated"] == 1  # the refused sample (text=None) is not counted
+    assert result["n_judged"] == 1
+    assert result["grounded_rate"] == 1.0
+    assert result["cited_rate"] == 1.0
+    assert result["no_invented_numbers_rate"] == 1.0
+    assert len(result["details"]) == 2
+    refused_detail = next(d for d in result["details"] if d["line_item_key"] == "total_liabilities")
+    assert refused_detail["narrated"] is False
+    assert refused_detail["judged"] is False
+
+
+def test_judge_only_rerun_raises_when_no_saved_samples_exist(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run(use_saved_generation=True) fails loudly, not by silently generating for real.
+
+    "No new generation spend" means a judge-only rerun must never fall
+    back to live (paid) narration just because no saved samples exist yet.
+    """
+    monkeypatch.setattr(judge_module, "get_app_settings", lambda: _Configured())
+    monkeypatch.setattr(judge_module, "_GENERATION_SAMPLES_PATH", tmp_path / "missing.json")
+
+    def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("must not narrate when no saved samples exist")
+
+    monkeypatch.setattr(judge_module, "generate_samples", _explode)
+
+    with pytest.raises(FileNotFoundError, match="use_saved_generation"):
+        run(use_saved_generation=True)
+
+
+def test_judge_only_rerun_loads_saved_samples_and_never_narrates(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """run(use_saved_generation=True) judges persisted samples with zero generation calls."""
+    samples_path = tmp_path / "generation_samples.json"
+    samples_path.write_text(
+        json.dumps({"tickers_run": ["AAPL"], "tickers_skipped": {}, "samples": [_SAMPLE]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(judge_module, "get_app_settings", lambda: _Configured())
+    monkeypatch.setattr(judge_module, "_GENERATION_SAMPLES_PATH", samples_path)
+
+    def _explode(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("must not generate new samples on a judge-only rerun")
+
+    monkeypatch.setattr(judge_module, "generate_samples", _explode)
+    monkeypatch.setattr(judge_module, "AnthropicNarrator", _explode)
+    fake_client = _FakeAnthropic(
+        responses=[
+            _verdict_json(
+                grounded=True, cited=False, no_invented_numbers=True, notes="No citation given."
+            )
+        ]
+    )
+    monkeypatch.setattr(judge_module, "_explicit_key_anthropic_client", lambda: fake_client)
+
+    result = run(use_saved_generation=True)
+
+    assert result["status"] == "ok"
+    assert result["n_judged"] == 1
+    assert result["cited_rate"] == 0.0
+    assert result["tickers_run"] == ["AAPL"]
+
+
+def test_run_default_persists_generation_samples_before_judging(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A normal run() call writes the full generation samples to disk before judging.
+
+    This is the "evals must persist inputs/outputs per sample" contract:
+    a later judge-only rerun (see the tests above) depends on this file
+    existing with the real figures/chunks/commentary, not just a lean
+    summary.
+    """
+    samples_path = tmp_path / "generation_samples.json"
+    monkeypatch.setattr(judge_module, "get_app_settings", lambda: _Configured())
+    monkeypatch.setattr(judge_module, "_GENERATION_SAMPLES_PATH", samples_path)
+    monkeypatch.setattr(
+        judge_module,
+        "generate_samples",
+        lambda: {"tickers_run": ["AAPL"], "tickers_skipped": {}, "samples": [_SAMPLE]},
+    )
+    fake_client = _FakeAnthropic(
+        responses=[
+            _verdict_json(
+                grounded=True, cited=True, no_invented_numbers=True, notes="Fully grounded."
+            )
+        ]
+    )
+    monkeypatch.setattr(judge_module, "_explicit_key_anthropic_client", lambda: fake_client)
+
+    result = run()
+
+    assert result["status"] == "ok"
+    persisted = json.loads(samples_path.read_text(encoding="utf-8"))
+    assert persisted["samples"] == [_SAMPLE]
+    assert persisted["tickers_run"] == ["AAPL"]

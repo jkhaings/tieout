@@ -42,7 +42,7 @@ flowchart LR
 ## Scorecard
 
 <!-- SCORECARD:START -->
-_Generated at 2026-09-20T18:13:47.646284+00:00 from commit `17eb9b3`._
+_Generated at 2026-09-20T20:28:35.784232+00:00 from commit `10603eb`._
 
 ### Tie-out accuracy (binary, cell-level, vs. raw companyfacts JSON)
 
@@ -79,13 +79,13 @@ Backend: **BM25-only**.
 
 Generator: `claude-sonnet-5`; judge: `claude-opus-5` (deliberately a different model).
 
-| Criterion | Rate |
+| Criterion | Result |
 | --- | --- |
-| Grounded | 69.2% |
-| Cited | 84.6% |
-| No invented numbers | 92.3% |
+| Grounded | 12/12 (100.0%) |
+| Cited | 10/12 (83.3%) |
+| No invented numbers | 12/12 (100.0%) |
 
-(13/13 narrated items judged; tickers run: AAPL, MSFT)
+(12/12 narrated items judged; tickers run: AAPL, MSFT)
 <!-- SCORECARD:END -->
 
 ## Bugs our own reviews caught
@@ -98,8 +98,17 @@ Every bug below was caught by our own tests or an adversarial review pass before
 - **SSE lost-wakeup race could hang a stream forever.** A race in the SSE notify pattern meant a client could miss the wakeup for the terminal event and hang indefinitely waiting for a stream that had already finished. Caught by a second review pass; fixed with a reproduction test before the fix landed.
 - **Unsynchronized cache-write race (this session).** `EdgarClient`'s disk cache wrote response bodies directly to their final path, so two concurrent runs fetching the same URL — or a write that failed partway — could leave a truncated or partially-written cache entry that a later reader would load as if it were complete. Fixed by writing to a temp file in the same directory, `fsync`-ing it, and publishing it with an atomic `os.replace`, so a reader only ever sees the old file or the fully-written new one, never a partial one; a cache write failure now degrades to "not cached" and logs only the entry's hash filename, never the URL or response body.
 - **Sign-/direction-blind number grounding (this session).** The number-grounding check in `app/rag/narrate.py` matched a claimed number's digits against the figures and citations but ignored sign — so a claim like "revenue grew to $9.45B" could pass grounding against a figure that was only ever given as `-$9.45B`, and a decline could in principle be narrated as growth without tripping any check. Fixed by tracking the polarity (+/-) each number is written with and requiring it to match the figure's own polarity, plus a new direction-of-change check that flags any clause whose "grew"/"declined"/"unchanged" claim contradicts the year-over-year figures it's demonstrably anchored to — abstaining (never over-rejecting) on negation, hedging, or ambiguous phrasing. An adversarial verification pass on the fix itself then caught a second, more subtle version of the same bug: dropping the "$" from a claim (ordinary phrasing — "generated 9.45B" instead of "generated $9.45B") shifted where the sign check looked and let it slip through in both directions again. Fixed in the same session before it shipped.
+- **Real narrated commentary attributed a genuine number to the wrong fiscal year, and a "steadily" claim silently skipped a real interior reversal (found by running the LLM-as-judge eval itself, not a synthetic test).** Grading actual model output surfaced two gaps neither the sign nor the direction check above closed: a correctly-valued FY2026 figure was explicitly narrated as "FY2025" (the number itself was real and grounded — only its year label was wrong), and a claim that operating cash flow "rose steadily" across five years quietly omitted a real, material year-over-year decline between the first two (the endpoint-to-endpoint check alone can't see an interior reversal if the two endpoints it's anchored to still net upward). Fixed with a year-attribution check (a number explicitly or relatively — "the most recent year" — tied to a specific fiscal year must match the year the figures actually report it under) and an interior-monotonicity check (a "steadily"/"consistently" claim is validated against every year in its span, not just its two endpoints), both with regression tests reproducing the exact real-sample inputs that found them. See "Methodology notes" below for how this was investigated.
 
 Two review passes in the same session also caught a run that could get stuck at `status="running"` forever on any unhandled exception, a TOCTOU race letting request bursts exceed the daily run cap, and a workbook cache that existed in code but was never wired up — all documented in `docs/BUILDLOG.md`.
+
+## Methodology notes
+
+**Sample sizes are small — read the fractions, not just the percentages.** The judge grades real narrated commentary over a fixed, small universe (10 line items × 2 tickers, and only the ones that actually retrieve grounding chunks in an Item 1A/Item 7-only corpus narrate at all — 12 of 20 in the current run). At n=12, a single flipped verdict moves a rate by ~8 percentage points; the scorecard above always shows the raw `hits/n_judged` fraction next to every judge percentage for exactly this reason.
+
+**One judge verdict, on inspection, looks like judge error rather than a real bug.** MSFT `operating_income` was flagged `no_invented_numbers: false`, but the judge's own `notes` for that verdict argue the opposite — it walks through both numbers named in the commentary, confirms each is verbatim-real ("both are fine"; "making all numbers traceable"), and never identifies an actual invented number. Independently re-deriving the exact figures the generator saw and running them back through `app/rag/narrate.py`'s own grounding/year-attribution/direction checks finds nothing to reject either. Logged here rather than discarded: with an n this small, a single inconsistent LLM-judge verdict (correct reasoning, contradictory boolean) is a real, expected failure mode of LLM-as-judge itself, not evidence of a narration bug — and the honest thing to do is say so, not quietly drop the sample or hand-wave the number up.
+
+**The other four flagged verdicts were real, and are now fixed.** Two `grounded: false` verdicts (a value narrated under the wrong fiscal year, "steadily" skipping a real interior decline) and two `cited: false` verdicts (the commentary's claims were accurate but omitted a citation) reproduced cleanly outside the judge and are addressed above and in "Failure modes" — the `cited: false` cases are a real, if lower-severity, gap: `narrate_line_item` does not currently require a citation whenever one is available, only when a number needs grounding evidence beyond the figures themselves.
 
 ## Failure modes
 
