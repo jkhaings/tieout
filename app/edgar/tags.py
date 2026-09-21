@@ -261,7 +261,16 @@ CANONICAL: Final[tuple[TagSpec, ...]] = (
         "Property, plant and equipment, net",
         Statement.BALANCE,
         "instant",
-        ("PropertyPlantAndEquipmentNet",),
+        (
+            "PropertyPlantAndEquipmentNet",
+            # Strictly a fallback, never preferred: this element folds finance-lease
+            # right-of-use assets into PP&E, so it is a broader concept and must not
+            # displace the plain tag for a filer that reports both. Some filers
+            # report *only* this one -- Meta files zero annual
+            # `PropertyPlantAndEquipmentNet` facts, leaving PP&E blank for every
+            # year without this fallback.
+            "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization",
+        ),
     ),
     TagSpec(
         "goodwill",
@@ -441,3 +450,66 @@ assert len(BY_KEY) == len(CANONICAL), "duplicate canonical key in tags.py"
 def get(key: str) -> TagSpec:
     """Look up a `TagSpec` by canonical key. Raises `KeyError` if unknown."""
     return BY_KEY[key]
+
+
+# --- Derived values ------------------------------------------------------
+#
+# A canonical line item is normally one filed fact chosen from a fallback
+# chain. Two identities below are instead *derived* from other filed facts,
+# for filers that report the inputs but not the result. This is deliberately
+# a different thing from the component-summing this module refuses to do
+# (see `selling_general_admin`): that would approximate an unreported concept
+# from a component list that is never exhaustive, whereas each derivation
+# here is one accounting identity rearranged, with no residual and no
+# judgement -- and each is immediately re-checked by a scored tie-out
+# identity in `app.model.verifier`, so a wrong derivation fails loudly rather
+# than shipping as a quiet number.
+DERIVED_PREFIX: Final[str] = "derived:"
+
+# Recorded in `LineItem.xbrl_tags` in place of a filed tag name, so the
+# provenance of a derived value is never mistaken for a filed one.
+DERIVED_TOTAL_LIABILITIES: Final[str] = (
+    "derived:LiabilitiesAndStockholdersEquity-StockholdersEquity"
+)
+DERIVED_PRETAX_INCOME: Final[str] = (
+    "derived:IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic"
+    "+IncomeLossFromContinuingOperationsBeforeIncomeTaxesForeign"
+)
+
+# Pretax income split by jurisdiction. McDonald's files these two and no
+# consolidated pretax element at all, so `net_income_buildup` cannot score
+# for it otherwise. Domestic + foreign is an exhaustive partition -- every
+# dollar of pretax income is one or the other -- which is why this is a
+# derivation and not a component sum; verified against McDonald's FY2020-2025,
+# where the sum equals net income + tax expense exactly in five of six years
+# and is $1,000,000 off in the sixth (FY2022 rounding).
+PRETAX_DOMESTIC: Final[TagSpec] = TagSpec(
+    "_pretax_domestic",
+    "Pretax income, domestic",
+    Statement.INCOME,
+    "duration",
+    ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",),
+)
+PRETAX_FOREIGN: Final[TagSpec] = TagSpec(
+    "_pretax_foreign",
+    "Pretax income, foreign",
+    Statement.INCOME,
+    "duration",
+    ("IncomeLossFromContinuingOperationsBeforeIncomeTaxesForeign",),
+)
+
+# Presence of this element means the filer has noncontrolling interests, so
+# parent-only `StockholdersEquity` is not total equity and the total-liabilities
+# derivation below would overstate liabilities by exactly NCI. Used only as a
+# refusal signal -- it is not a canonical line item.
+NONCONTROLLING_INTEREST_TAG: Final[str] = "MinorityInterest"
+
+# The equity tag that excludes noncontrolling interests. When `total_equity`
+# resolves to this one, the total-liabilities derivation is only safe if the
+# filer has no noncontrolling interests at all.
+PARENT_ONLY_EQUITY_TAG: Final[str] = "StockholdersEquity"
+
+
+def is_derived(tag: str) -> bool:
+    """True if `tag` is a derivation marker rather than a filed `us-gaap` element."""
+    return tag.startswith(DERIVED_PREFIX)
