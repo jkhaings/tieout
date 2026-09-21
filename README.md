@@ -42,7 +42,7 @@ flowchart LR
 ## Scorecard
 
 <!-- SCORECARD:START -->
-_Generated at 2026-09-20T20:28:35.784232+00:00 from commit `10603eb`._
+_Generated at 2026-09-21T18:57:03.780487+00:00 from commit `5836a70`._
 
 ### Tie-out accuracy (binary, cell-level, vs. raw companyfacts JSON)
 
@@ -81,11 +81,11 @@ Generator: `claude-sonnet-5`; judge: `claude-opus-5` (deliberately a different m
 
 | Criterion | Result |
 | --- | --- |
-| Grounded | 12/12 (100.0%) |
-| Cited | 10/12 (83.3%) |
-| No invented numbers | 12/12 (100.0%) |
+| Grounded | 7/7 (100.0%) |
+| Cited | 6/7 (85.7%) |
+| No invented numbers | 7/7 (100.0%) |
 
-(12/12 narrated items judged; tickers run: AAPL, MSFT)
+(7/7 narrated items judged; tickers run: AAPL, MSFT)
 <!-- SCORECARD:END -->
 
 ## Bugs our own reviews caught

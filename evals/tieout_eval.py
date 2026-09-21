@@ -13,9 +13,16 @@ a local-only entry point).
 A cell is `(ticker, line_item_key, fiscal_year)`. It is correct iff:
 
 - both the gold value and the actual (built) value are `None`, or
-- both are non-`None` and `abs(actual - gold) <= 1.0` (the same $1 absolute
-  tolerance as `app.model.verifier._TOLERANCE`, guarding only float
-  representation, not real accounting slop).
+- both are non-`None` and `abs(actual - gold) <= 1.0` (a $1 absolute
+  tolerance, guarding only float representation, not real accounting slop).
+
+This is deliberately *not* the tolerance `app.model.verifier` applies to its
+tie-out checks. That one is inferred per check from the rounding granularity
+of the facts it sums, because a filer presenting in millions injects up to a
+million dollars of rounding into each term of an identity. Here there is no
+identity and no summing -- one built cell is compared against the same fact
+re-derived from the same JSON -- so anything beyond float noise is a real
+mismatch and must be reported as one.
 
 Anything else -- one side `None` and the other not, or both non-`None` but
 more than $1 apart -- is a mismatch and is recorded, never silently
@@ -35,7 +42,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 FIXTURES_DIR = REPO_ROOT / "tests" / "fixtures"
 GOLD_PATH = Path(__file__).resolve().parent / "datasets" / "tieout_gold.json"
 
-_TOLERANCE_USD = 1.0  # matches app.model.verifier._TOLERANCE
+_TOLERANCE_USD = 1.0  # float-representation only; see the module docstring
 
 
 def _load_json(path: Path) -> dict[str, Any]:
