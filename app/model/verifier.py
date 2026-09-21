@@ -37,11 +37,64 @@ able to affect `TieoutReport.passed`.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
+from app.edgar.tags import is_derived
 from app.schemas import LineItem, StatementSet, TieoutCheck, TieoutReport
 
-_TOLERANCE = 1.0  # USD -- filed values are whole dollars; this only guards float representation
+# A filed fact carries the rounding of the statement it was presented in: a
+# filer presenting in millions files 8_223_000_000, not the exact dollar
+# amount. Every term of a summed identity therefore contributes up to its own
+# rounding unit of noise, so a check's tolerance is the *sum of its terms'
+# units*, not one global constant. Measured against real filings:
+# McDonald's FY2024 cash roll-forward differs by exactly $1,000,000 across
+# six million-rounded terms -- ordinary rounding, not a broken statement --
+# while its FY2022 balance sheet mixes a million-rounded `Assets` with a
+# hundred-thousand-rounded `LiabilitiesAndStockholdersEquity` and differs by
+# $400,000. Taking the *finest* unit across terms would false-FAIL that
+# second case: accumulated rounding noise is bounded by the coarsest
+# rounding applied to any term, never the finest.
+_MIN_TOLERANCE = 1.0  # floor -- guards float representation for whole-dollar filers
+_ROUNDING_UNITS = (1_000_000.0, 100_000.0, 10_000.0, 1_000.0)
+_REL_EPS = 1e-12
+
+
+def _rounding_unit(value: float) -> float:
+    """The coarsest unit `value` is an exact multiple of, or `1.0`.
+
+    Units below $1,000 are deliberately not candidates: a whole-dollar figure
+    that happens to end in "00" is a coincidence, not a reporting scale, and
+    admitting it would widen every exact filer's tolerance for nothing.
+
+    Args:
+        value: One filed term of an accounting identity, in USD.
+
+    Returns:
+        The largest of `_ROUNDING_UNITS` that divides `value` exactly, else
+        `1.0`. Tested against the reconstructed value rather than with `%`,
+        so it is sign-safe and scale-safe.
+    """
+    for unit in _ROUNDING_UNITS:
+        if abs(value - round(value / unit) * unit) <= abs(value) * _REL_EPS:
+            return unit
+    return 1.0
+
+
+def _infer_tolerance(terms: Sequence[float]) -> float:
+    """Sum each term's own rounding unit -- the bound on accumulated rounding noise.
+
+    Args:
+        terms: Every filed value the identity sums. An optional term that was
+            not reported contributes no rounding noise and is never passed in
+            (see `verify`).
+
+    Returns:
+        The tolerance in USD, never below `_MIN_TOLERANCE`. Exact zeros are
+        skipped: they divide by every unit, so they carry no evidence of the
+        filer's presentation scale.
+    """
+    return max(_MIN_TOLERANCE, sum(_rounding_unit(t) for t in terms if t != 0.0))
 
 
 class _Values:
@@ -63,18 +116,47 @@ class _Values:
         value = self.get(key, fiscal_year)
         return value if value is not None else 0.0
 
+    def is_derived(self, key: str) -> bool:
+        """True if this line item's values came from algebra rather than a filed tag.
+
+        Item-level, not per-year: `LineItem.xbrl_tags` records which tags a
+        line item used across all presented years and cannot say *which* year
+        used which, so `app.model.builder` only ever derives all-or-nothing.
+        """
+        item = self._by_key.get(key)
+        return item is not None and any(is_derived(tag) for tag in item.xbrl_tags)
+
 
 def _check(
-    check_id: str, description: str, fiscal_year: int, lhs: float, rhs: float
+    check_id: str,
+    description: str,
+    fiscal_year: int,
+    lhs: float,
+    rhs: float,
+    *,
+    terms: Sequence[float],
 ) -> TieoutCheck:
+    """One scored check, with its tolerance inferred from its own inputs' rounding.
+
+    `terms` is keyword-only so it can never be passed positionally where
+    `lhs`/`rhs` belong, and the inferred tolerance is spelled out in the
+    check's own description -- a reader seeing a $6,000,000 tolerance in the
+    Tie-out tab is owed the arithmetic behind it.
+    """
+    assert terms, f"{check_id}: a scored check must declare the terms it sums"
+    tolerance = _infer_tolerance(terms)
+    coarsest = max((_rounding_unit(t) for t in terms if t != 0.0), default=1.0)
     return TieoutCheck(
         check_id=check_id,
-        description=description,
+        description=(
+            f"{description} (tolerance ${tolerance:,.0f}: {len(terms)} filed terms, "
+            f"rounded to at most the nearest ${coarsest:,.0f})"
+        ),
         fiscal_year=fiscal_year,
-        passed=abs(lhs - rhs) <= _TOLERANCE,
+        passed=abs(lhs - rhs) <= tolerance,
         lhs=lhs,
         rhs=rhs,
-        tolerance=_TOLERANCE,
+        tolerance=tolerance,
     )
 
 
@@ -114,7 +196,28 @@ def verify(statements: StatementSet) -> TieoutReport:
         assets = v.get("total_assets", fy)
         liabilities = v.get("total_liabilities", fy)
         equity = v.get("total_equity", fy)
-        if assets is not None and liabilities is not None and equity is not None:
+        if v.is_derived("total_liabilities"):
+            # This filer reports no `us-gaap:Liabilities`, so total liabilities
+            # was derived from `L&SE - equity` (see `app.model.builder`). The
+            # three-term identity would then reduce algebraically to
+            # `assets = L&SE` and score the derivation against itself -- a
+            # check that cannot fail proves nothing. Compare the two
+            # independently filed facts instead, and say so in the row.
+            liabilities_and_equity = v.get("total_liabilities_and_equity", fy)
+            if assets is not None and liabilities_and_equity is not None:
+                year_checks.append(
+                    _check(
+                        f"balance_sheet_equation_independent_{fy}",
+                        "Total assets = total liabilities and stockholders' equity, both as "
+                        "filed (this filer reports no us-gaap:Liabilities, so total "
+                        "liabilities is derived and the three-term identity would be circular)",
+                        fy,
+                        assets,
+                        liabilities_and_equity,
+                        terms=(assets, liabilities_and_equity),
+                    )
+                )
+        elif assets is not None and liabilities is not None and equity is not None:
             year_checks.append(
                 _check(
                     f"balance_sheet_equation_{fy}",
@@ -122,6 +225,7 @@ def verify(statements: StatementSet) -> TieoutReport:
                     fy,
                     assets,
                     liabilities + equity,
+                    terms=(assets, liabilities, equity),
                 )
             )
 
@@ -136,6 +240,7 @@ def verify(statements: StatementSet) -> TieoutReport:
                     fy,
                     gross_profit,
                     revenue - cost_of_revenue,
+                    terms=(gross_profit, revenue, cost_of_revenue),
                 )
             )
 
@@ -153,6 +258,7 @@ def verify(statements: StatementSet) -> TieoutReport:
                     fy,
                     operating_income,
                     gross_profit - operating_expenses,
+                    terms=(operating_income, gross_profit, operating_expenses),
                 )
             )
 
@@ -160,7 +266,11 @@ def verify(statements: StatementSet) -> TieoutReport:
         income_tax = v.get("income_tax_expense", fy)
         net_income = v.get("net_income", fy)
         if pretax_income is not None and income_tax is not None and net_income is not None:
-            nci = v.get_or_zero("noncontrolling_interest_in_income", fy)
+            reported_nci = v.get("noncontrolling_interest_in_income", fy)
+            nci = reported_nci if reported_nci is not None else 0.0
+            terms: tuple[float, ...] = (net_income, pretax_income, income_tax)
+            if reported_nci is not None:
+                terms += (reported_nci,)
             year_checks.append(
                 _check(
                     f"net_income_buildup_{fy}",
@@ -169,6 +279,7 @@ def verify(statements: StatementSet) -> TieoutReport:
                     fy,
                     net_income,
                     pretax_income - income_tax - nci,
+                    terms=terms,
                 )
             )
 
@@ -180,7 +291,11 @@ def verify(statements: StatementSet) -> TieoutReport:
         if None not in (cash, cash_prior, cfo, cfi, cff):
             assert cash is not None and cash_prior is not None
             assert cfo is not None and cfi is not None and cff is not None
-            fx = v.get_or_zero("fx_effect_on_cash", fy)
+            reported_fx = v.get("fx_effect_on_cash", fy)
+            fx = reported_fx if reported_fx is not None else 0.0
+            cash_terms: tuple[float, ...] = (cash, cash_prior, cfo, cfi, cff)
+            if reported_fx is not None:
+                cash_terms += (reported_fx,)
             year_checks.append(
                 _check(
                     f"cash_roll_forward_{fy}",
@@ -189,6 +304,7 @@ def verify(statements: StatementSet) -> TieoutReport:
                     fy,
                     cash - cash_prior,
                     cfo + cfi + cff + fx,
+                    terms=cash_terms,
                 )
             )
 
@@ -246,8 +362,10 @@ def reconcile(statements: StatementSet) -> list[Reconciliation]:
     that suggests it is just float noise. Scoring a check that is
     consistently *close but not exact* as binary pass/fail would need an
     arbitrary percentage tolerance found nowhere else in this module (every
-    other check uses a fixed $1 tolerance, because the underlying identity
-    is exact); rather than invent one, this is surfaced as a named residual
+    other check's tolerance is absolute and derived from the filed values'
+    own rounding -- see `_infer_tolerance` -- which is exactly the
+    justification a percentage of assets would lack); rather than invent one,
+    this is surfaced as a named residual
     for the Tie-out tab to show honestly, without asserting a verdict
     (CLAUDE.md rule 4 says fail closed on a *failed* tie-out, not manufacture
     a check that can never cleanly pass or fail).
