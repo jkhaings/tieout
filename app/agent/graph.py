@@ -132,7 +132,14 @@ class PipelineState(TypedDict, total=False):
     tieout: TieoutReport
     reconciliations: list[Reconciliation]
     chunks_by_item: dict[str, list[Chunk]]
+    # Why retrieval produced nothing, when it produced nothing -- carried into
+    # each refused line item's reason so the workbook can say which upstream
+    # step failed, not merely that commentary is absent.
+    retrieval_note: str
     commentary: list[Commentary]
+    # line item key -> why it has no commentary. Deterministic facts about the
+    # run, never model output; rendered by `app.agent.workbook`.
+    commentary_refusals: dict[str, str]
     narrate_ok: bool
     artifact_path: str
 
@@ -304,12 +311,23 @@ def retrieve(
             "ok",
             detail="no filing text available; commentary will be skipped",
         )
-        return {"chunks_by_item": {}}
+        logger.warning("no filing text available; commentary skipped", extra={"run_id": run_id})
+        return {"chunks_by_item": {}, "retrieval_note": "the filing text could not be fetched"}
 
     chunks_by_item: dict[str, list[Chunk]] = {}
+    note = ""
     try:
         source_url = _source_url(state["cik"], state["accession_number"], state["primary_document"])
         all_chunks = parse_filing(html, source_url=source_url, settings=ctx.rag_settings)
+        if not all_chunks:
+            # Neither Item 1A nor Item 7 was found. Nothing raises here and
+            # nothing logged before, so this failure mode was invisible in
+            # production -- the empty Commentary tab was its only symptom.
+            logger.warning(
+                "parse_filing found no sections; commentary will be skipped",
+                extra={"run_id": run_id},
+            )
+            note = "the filing parsed to zero sections (Item 1A / Item 7 not found)"
         if all_chunks:
             index = HybridIndex.build(all_chunks, embedder=ctx.embedder, persist_dir=None)
             retriever = Retriever(index, ctx.reranker, ctx.rag_settings)
@@ -330,11 +348,11 @@ def retrieve(
             "failed",
             detail="retrieval failed; commentary will be skipped",
         )
-        return {"chunks_by_item": {}}
+        return {"chunks_by_item": {}, "retrieval_note": "retrieval failed"}
 
     detail = f"{len(chunks_by_item)}/{len(COMMENTARY_LINE_ITEMS)} line items have grounding chunks"
     _emit(writer, run_id, "retrieve", "ok", detail=detail)
-    return {"chunks_by_item": chunks_by_item}
+    return {"chunks_by_item": chunks_by_item, "retrieval_note": note}
 
 
 def narrate(
@@ -361,10 +379,18 @@ def narrate(
     chunks_by_item = state.get("chunks_by_item", {})
     commentary: list[Commentary] = []
 
+    note = state.get("retrieval_note", "")
+    refusals: dict[str, str] = {}
+
     if ctx.narrator_client is None:
         commentary = [
             Commentary(line_item_key=key, text=None, citations=[]) for key in COMMENTARY_LINE_ITEMS
         ]
+        reason = "ANTHROPIC_API_KEY is not configured on this deployment"
+        # Logged, not only streamed: an unkeyed production run was previously
+        # silent in `docker logs`, leaving an empty Commentary tab as the only
+        # evidence anything had gone wrong.
+        logger.warning("narration skipped: %s", reason, extra={"run_id": run_id})
         _emit(
             writer,
             run_id,
@@ -372,7 +398,11 @@ def narrate(
             "ok",
             detail="ANTHROPIC_API_KEY not configured; commentary skipped",
         )
-        return {"commentary": commentary, "narrate_ok": False}
+        return {
+            "commentary": commentary,
+            "narrate_ok": False,
+            "commentary_refusals": dict.fromkeys(COMMENTARY_LINE_ITEMS, reason),
+        }
 
     consecutive_failures = 0
     circuit_open = False
@@ -380,29 +410,48 @@ def narrate(
     for key in COMMENTARY_LINE_ITEMS:
         item = items_by_key.get(key)
         if item is None:
+            # This filer does not report the concept at all (McDonald's files
+            # no gross profit). Previously this `continue`d, dropping the item
+            # from `commentary` entirely so the workbook had no row for it.
+            commentary.append(Commentary(line_item_key=key, text=None, citations=[]))
+            refusals[key] = "this filer does not report this line item"
             continue
         figures = build_figures(item, statements)
         chunks = chunks_by_item.get(key, [])
         if circuit_open or not figures or not chunks:
             commentary.append(Commentary(line_item_key=key, text=None, citations=[]))
+            if circuit_open:
+                refusals[key] = "narration stopped early after repeated API errors"
+            elif not figures:
+                refusals[key] = "this filer reports no value for this line item in any year"
+            else:
+                refusals[key] = (
+                    f"no filing passage was retrieved for this line item ({note})"
+                    if note
+                    else "no filing passage was retrieved for this line item"
+                )
             continue
         try:
-            commentary.append(
-                run_narrate_line_item(
-                    line_item_key=key,
-                    label=item.label,
-                    figures=figures,
-                    chunks=chunks,
-                    client=ctx.narrator_client,
-                    settings=ctx.rag_settings,
-                )
+            narrated = run_narrate_line_item(
+                line_item_key=key,
+                label=item.label,
+                figures=figures,
+                chunks=chunks,
+                client=ctx.narrator_client,
+                settings=ctx.rag_settings,
             )
+            commentary.append(narrated)
+            if narrated.text is None:
+                refusals[key] = (
+                    "the model's draft failed grounding or schema validation twice; refused"
+                )
             consecutive_failures = 0
         except Exception as exc:  # noqa: BLE001 - the client's own transport/API errors
             logger.warning("narrate failed for %r: %s", key, exc, extra={"run_id": run_id})
             had_error = True
             consecutive_failures += 1
             commentary.append(Commentary(line_item_key=key, text=None, citations=[]))
+            refusals[key] = "the narration API call failed"
             if consecutive_failures >= _NARRATE_CIRCUIT_BREAKER_THRESHOLD:
                 circuit_open = True
 
@@ -411,7 +460,11 @@ def narrate(
     if circuit_open:
         detail += " -- stopped early after repeated API errors"
     _emit(writer, run_id, "narrate", "failed" if had_error else "ok", detail=detail)
-    return {"commentary": commentary, "narrate_ok": n_narrated > 0}
+    return {
+        "commentary": commentary,
+        "narrate_ok": n_narrated > 0,
+        "commentary_refusals": refusals,
+    }
 
 
 def generate(
@@ -440,6 +493,7 @@ def generate(
             state.get("commentary", []),
             labels_by_key=labels_by_key,
             chunks_by_id=chunks_by_id,
+            refusal_reasons=state.get("commentary_refusals", {}),
         )
         artifact_dir = runtime.context.runs_dir / run_id
         artifact_dir.mkdir(parents=True, exist_ok=True)
