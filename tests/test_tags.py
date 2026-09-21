@@ -4,7 +4,17 @@ from __future__ import annotations
 
 import pytest
 
-from app.edgar.tags import BY_KEY, CANONICAL, get
+from app.edgar.tags import (
+    BY_KEY,
+    CANONICAL,
+    DERIVED_PRETAX_INCOME,
+    DERIVED_TOTAL_LIABILITIES,
+    NONCONTROLLING_INTEREST_TAG,
+    PRETAX_DOMESTIC,
+    PRETAX_FOREIGN,
+    get,
+    is_derived,
+)
 from app.schemas import Statement
 
 
@@ -85,3 +95,28 @@ def test_sga_is_not_synthesized_from_its_components() -> None:
     assert combined.tags == ("SellingGeneralAndAdministrativeExpense",)
     assert ga.tags == ("GeneralAndAdministrativeExpense",)
     assert sm.tags == ("SellingAndMarketingExpense",)
+
+
+def test_derivation_markers_are_not_us_gaap_element_names() -> None:
+    """A derived value's provenance must never be mistaken for a filed tag."""
+    assert is_derived(DERIVED_TOTAL_LIABILITIES)
+    assert is_derived(DERIVED_PRETAX_INCOME)
+    assert not any(is_derived(tag) for spec in CANONICAL for tag in spec.tags)
+
+
+def test_derivation_sources_are_not_canonical_line_items() -> None:
+    """The jurisdiction split feeds a derivation; it is not a presented row."""
+    keys = {spec.key for spec in CANONICAL}
+    assert PRETAX_DOMESTIC.key not in keys
+    assert PRETAX_FOREIGN.key not in keys
+    assert NONCONTROLLING_INTEREST_TAG not in {tag for spec in CANONICAL for tag in spec.tags}
+
+
+def test_broader_ppe_element_is_only_ever_a_fallback() -> None:
+    """The finance-lease-inclusive element folds right-of-use assets into PP&E,
+    so it is a wider concept and must never outrank the plain tag."""
+    chain = BY_KEY["ppe_net"].tags
+    assert chain[0] == "PropertyPlantAndEquipmentNet"
+    assert chain.index("PropertyPlantAndEquipmentNet") < chain.index(
+        "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization"
+    )

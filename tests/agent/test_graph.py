@@ -12,7 +12,9 @@ import json
 from pathlib import Path
 
 import pytest
+from openpyxl import load_workbook
 
+from app.agent.formatting import COMMENTARY_LINE_ITEMS
 from app.agent.graph import GRAPH, FatalPipelineError, PipelineContext, PipelineState, _traced
 from app.edgar.client import EdgarClient
 from app.rag import LLMClient
@@ -157,6 +159,22 @@ async def test_no_narrator_client_skips_narration_without_error(
     assert "not configured" in narrate_events[-1].detail
     assert all(c.text is None for c in state["commentary"])
     assert state["narrate_ok"] is False
+    assert all("ANTHROPIC_API_KEY" in reason for reason in state["commentary_refusals"].values())
+
+
+async def test_unnarrated_run_still_ships_a_populated_commentary_sheet(
+    aapl_edgar_client: EdgarClient, tmp_path: Path
+) -> None:
+    """The regression that would have caught the audited META/MCD workbooks:
+    a run that narrates nothing must still explain itself, once per line item,
+    rather than shipping a Commentary tab holding only its headers."""
+    context = _context(aapl_edgar_client, tmp_path, narrator_client=None)
+    _, state = await _run(context)
+
+    sheet = load_workbook(state["artifact_path"])["Commentary"]
+    data_rows = [row for row in sheet.iter_rows(min_row=4, values_only=True) if any(row)]
+    assert len(data_rows) == len(COMMENTARY_LINE_ITEMS)
+    assert all("no grounded commentary available: " in str(row[1]) for row in data_rows)
 
 
 async def test_narrate_exceptions_degrade_via_circuit_breaker_not_abort(

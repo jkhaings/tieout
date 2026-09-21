@@ -1,0 +1,75 @@
+{
+  "cik": "0001326801",
+  "name": "Meta Platforms, Inc.",
+  "tickers": [
+    "META"
+  ],
+  "filings": {
+    "recent": {
+      "accessionNumber": [
+        "0001628280-26-003942",
+        "0001326801-25-000017"
+      ],
+      "filingDate": [
+        "2026-01-29",
+        "2025-01-30"
+      ],
+      "reportDate": [
+        "2025-12-31",
+        "2024-12-31"
+      ],
+      "acceptanceDateTime": [
+        "2026-01-29T00:13:46.000Z",
+        "2025-01-30T01:00:50.000Z"
+      ],
+      "act": [
+        "34",
+        "34"
+      ],
+      "form": [
+        "10-K",
+        "10-K"
+      ],
+      "fileNumber": [
+        "001-35551",
+        "001-35551"
+      ],
+      "filmNumber": [
+        "26574094",
+        "25570747"
+      ],
+      "items": [
+        "",
+        ""
+      ],
+      "core_type": [
+        "XBRL",
+        "XBRL"
+      ],
+      "size": [
+        14509410,
+        14236240
+      ],
+      "isXBRL": [
+        1,
+        1
+      ],
+      "isInlineXBRL": [
+        1,
+        1
+      ],
+      "isXBRLNumeric": [
+        null,
+        null
+      ],
+      "primaryDocument": [
+        "meta-20251231.htm",
+        "meta-20241231.htm"
+      ],
+      "primaryDocDescription": [
+        "10-K",
+        "10-K"
+      ]
+    }
+  }
+}

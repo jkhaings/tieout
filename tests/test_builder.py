@@ -9,7 +9,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.edgar.tags import CANONICAL
+from app.edgar.tags import (
+    CANONICAL,
+    DERIVED_PRETAX_INCOME,
+    DERIVED_TOTAL_LIABILITIES,
+    is_derived,
+)
 from app.model.builder import PRESENTED_FISCAL_YEARS, build_statements
 from app.schemas import LineItem, StatementSet
 
@@ -128,3 +133,167 @@ def test_build_statements_is_pure_and_deterministic(
     first = build_statements(aapl_facts, aapl_submissions, "AAPL")
     second = build_statements(aapl_facts, aapl_submissions, "AAPL")
     assert first == second
+
+
+# ---- Production workbook audit: derived line items -------------------------
+#
+# MCD files no `us-gaap:Liabilities` and no consolidated pretax element, so
+# total liabilities and pretax income were blank for every year, the
+# debt-to-equity ratio had nothing to divide, and neither the balance-sheet
+# equation nor the net-income build-up could be scored even once.
+
+
+def _facts(tags: dict[str, Any]) -> dict[str, Any]:
+    return {"cik": 1, "entityName": "Synthetic Co", "facts": {"us-gaap": tags}}
+
+
+def _instant(tag: str, end: str, val: float, fy: int) -> tuple[str, Any]:
+    return tag, {
+        "units": {
+            "USD": [
+                {
+                    "end": end,
+                    "val": val,
+                    "fy": fy,
+                    "fp": "FY",
+                    "form": "10-K",
+                    "filed": f"{fy + 1}-02-01",
+                }
+            ]
+        }
+    }
+
+
+def _duration(tag: str, end: str, val: float, fy: int) -> tuple[str, Any]:
+    return tag, {
+        "units": {
+            "USD": [
+                {
+                    "start": f"{fy}-01-01",
+                    "end": end,
+                    "val": val,
+                    "fy": fy,
+                    "fp": "FY",
+                    "form": "10-K",
+                    "filed": f"{fy + 1}-02-01",
+                }
+            ]
+        }
+    }
+
+
+_SUBMISSIONS = {"cik": 1, "name": "Synthetic Co"}
+
+
+def _item(statements: StatementSet, key: str) -> LineItem:
+    return next(i for i in statements.items if i.key == key)
+
+
+def test_total_liabilities_is_derived_when_no_liabilities_tag_is_filed(
+    mcd_statements: StatementSet,
+) -> None:
+    liabilities = _item(mcd_statements, "total_liabilities")
+    total = _item(mcd_statements, "total_liabilities_and_equity")
+    equity = _item(mcd_statements, "total_equity")
+
+    assert liabilities.xbrl_tags == [DERIVED_TOTAL_LIABILITIES]
+    assert is_derived(liabilities.xbrl_tags[0])
+    for fy in mcd_statements.fiscal_years:
+        assert liabilities.values[fy] == total.values[fy] - equity.values[fy]
+
+
+def test_pretax_income_is_derived_from_the_jurisdiction_split(
+    mcd_statements: StatementSet,
+) -> None:
+    pretax = _item(mcd_statements, "pretax_income")
+    assert pretax.xbrl_tags == [DERIVED_PRETAX_INCOME]
+    assert all(pretax.values[fy] is not None for fy in mcd_statements.fiscal_years)
+
+
+def test_filed_values_are_never_overwritten_by_a_derivation(
+    aapl_statements: StatementSet, meta_statements: StatementSet
+) -> None:
+    """Both filers report `Liabilities` directly; neither may be derived."""
+    for statements in (aapl_statements, meta_statements):
+        liabilities = _item(statements, "total_liabilities")
+        assert liabilities.xbrl_tags == ["Liabilities"]
+        assert not any(is_derived(tag) for tag in liabilities.xbrl_tags)
+
+
+def test_derivation_refuses_when_noncontrolling_interests_would_overstate_it() -> None:
+    """`L&SE - StockholdersEquity` is `liabilities + NCI` when equity is
+    parent-only, and no scored check could catch the overstatement -- the
+    balance-sheet check for such a filer compares Assets against L&SE and
+    would tie either way. Refuse rather than ship a silently wrong number.
+    """
+    shared = dict(
+        [
+            _instant("Assets", "2024-12-31", 100.0, 2024),
+            _instant("LiabilitiesAndStockholdersEquity", "2024-12-31", 100.0, 2024),
+            _instant("StockholdersEquity", "2024-12-31", 60.0, 2024),
+        ]
+    )
+    without_nci = build_statements(_facts(shared), _SUBMISSIONS, "TEST")
+    assert _item(without_nci, "total_liabilities").values[2024] == 40.0
+
+    with_nci = build_statements(
+        _facts({**shared, **dict([_instant("MinorityInterest", "2024-12-31", 5.0, 2024)])}),
+        _SUBMISSIONS,
+        "TEST",
+    )
+    liabilities = _item(with_nci, "total_liabilities")
+    assert liabilities.values[2024] is None  # refused, not 45.0
+    assert liabilities.xbrl_tags == []
+
+
+def test_derivation_is_skipped_without_its_inputs() -> None:
+    """No `LiabilitiesAndStockholdersEquity` means nothing to derive from."""
+    statements = build_statements(
+        _facts(dict([_instant("Assets", "2024-12-31", 100.0, 2024)])), _SUBMISSIONS, "TEST"
+    )
+    liabilities = _item(statements, "total_liabilities")
+    assert liabilities.values[2024] is None
+    assert liabilities.xbrl_tags == []
+
+
+def test_pretax_derivation_needs_both_jurisdictions() -> None:
+    """Domestic alone is not an exhaustive partition, so it is not a derivation."""
+    statements = build_statements(
+        _facts(
+            dict(
+                [
+                    _instant("Assets", "2024-12-31", 100.0, 2024),
+                    _duration(
+                        "IncomeLossFromContinuingOperationsBeforeIncomeTaxesDomestic",
+                        "2024-12-31",
+                        10.0,
+                        2024,
+                    ),
+                ]
+            )
+        ),
+        _SUBMISSIONS,
+        "TEST",
+    )
+    assert _item(statements, "pretax_income").values[2024] is None
+
+
+def test_meta_ppe_populates_from_the_finance_lease_inclusive_element(
+    meta_statements: StatementSet,
+) -> None:
+    """META files zero annual `PropertyPlantAndEquipmentNet` facts, so PP&E was
+    blank for every year without the fallback."""
+    ppe = _item(meta_statements, "ppe_net")
+    assert all(ppe.values[fy] is not None for fy in meta_statements.fiscal_years)
+    assert ppe.xbrl_tags == [
+        "PropertyPlantAndEquipmentAndFinanceLeaseRightOfUseAssetAfterAccumulatedDepreciationAndAmortization"
+    ]
+
+
+def test_filers_reporting_plain_ppe_never_use_the_broader_fallback(
+    aapl_statements: StatementSet, mcd_statements: StatementSet
+) -> None:
+    """The fallback folds finance-lease right-of-use assets into PP&E, so it
+    must never displace the plain tag for a filer that reports both."""
+    for statements in (aapl_statements, mcd_statements):
+        assert _item(statements, "ppe_net").xbrl_tags == ["PropertyPlantAndEquipmentNet"]

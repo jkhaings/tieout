@@ -23,17 +23,30 @@ from pathlib import Path
 from typing import Any
 
 from app.edgar.client import EdgarClient
-from app.edgar.tags import CANONICAL
+from app.edgar.tags import (
+    CANONICAL,
+    NONCONTROLLING_INTEREST_TAG,
+    PRETAX_DOMESTIC,
+    PRETAX_FOREIGN,
+)
 from app.settings import EdgarSettings
 
 FIXTURES_DIR = Path(__file__).parent
-TICKERS = ("AAPL", "MSFT")
+TICKERS = ("AAPL", "MSFT", "MCD", "META")
 MIN_PERIOD_END = date(2018, 1, 1)
 
 # Every tag any canonical fallback chain can reach -- trimming to this set
 # is what keeps fixtures small while still covering everything the code
 # under test actually reads.
-_WANTED_TAGS = {tag for spec in CANONICAL for tag in spec.tags}
+_WANTED_TAGS = {tag for spec in CANONICAL for tag in spec.tags} | {
+    # Not canonical line items, but `app.model.builder` reads them: the two
+    # jurisdiction components it derives pretax income from, and the element
+    # whose presence makes the total-liabilities derivation unsafe. Trimming
+    # them out would silently disable both derivations in hermetic tests.
+    *PRETAX_DOMESTIC.tags,
+    *PRETAX_FOREIGN.tags,
+    NONCONTROLLING_INTEREST_TAG,
+}
 
 
 def _trim_companyfacts(raw: dict[str, Any]) -> dict[str, Any]:

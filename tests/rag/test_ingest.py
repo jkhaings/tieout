@@ -195,3 +195,65 @@ def test_chunks_validate_against_the_frozen_chunk_schema(aapl_10k_excerpt_html: 
         assert chunk.source_url == SOURCE_URL
         assert chunk.text.strip() == chunk.text
         assert chunk.text
+
+
+# --- Production workbook audit: filers that label sections only in the TOC ---
+
+
+def _mcd_shaped_filing() -> str:
+    """A filing in McDonald's shape: item numbers appear only in the contents
+    table, and the section bodies are headed by the bare title."""
+    body = " ".join(f"Sentence number {i} about the business and its results." for i in range(120))
+    return f"""
+    <html><body>
+      <p>Item 1 Business Page 1</p>
+      <p>Item 1A Risk Factors Page 5</p>
+      <p>Properties Page 9</p>
+      <p>Item 7 Management's Discussion and Analysis Page 12</p>
+      <p>Financial Statements and Supplementary Data Page 40</p>
+      <h1>RISK FACTORS</h1>
+      <p>{body}</p>
+      <h1>PROPERTIES</h1>
+      <p>Restaurant locations are described here.</p>
+      <h1>MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS</h1>
+      <p>{body}</p>
+      <h1>Financial Statements and Supplementary Data</h1>
+      <p>The financial statements follow.</p>
+    </body></html>
+    """
+
+
+def test_bare_title_headings_are_extracted_when_items_appear_only_in_the_toc() -> None:
+    """McDonald's 10-K contains the string "Item 1A" exactly once -- in its
+    contents table -- so both sections were reduced to a single stray chunk
+    each and no line item had anything to ground commentary in."""
+    chunks = parse_filing(_mcd_shaped_filing(), source_url="https://example.com/mcd.htm")
+    sections = {chunk.section for chunk in chunks}
+    assert sections == {"Item 1A. Risk Factors", "Item 7. Management's Discussion and Analysis"}
+    assert len(chunks) > 2
+
+    risk = " ".join(c.text for c in chunks if c.section == "Item 1A. Risk Factors")
+    mdna = " ".join(
+        c.text for c in chunks if c.section == "Item 7. Management's Discussion and Analysis"
+    )
+    # Each section stops at its own boundary heading rather than swallowing
+    # the rest of the document.
+    assert "Restaurant locations" not in risk
+    assert "The financial statements follow" not in mdna
+
+
+def test_a_bare_title_in_prose_is_not_mistaken_for_a_heading() -> None:
+    """The bare form must be the entire line; many sentences open with the
+    same words ("Management's Discussion and Analysis ... is based upon...")."""
+    html = """
+    <html><body>
+      <p>Item 1A. Risk Factors</p>
+      <p>The real risk factor discussion lives here and runs on for a while.</p>
+      <p>Item 2. Properties</p>
+      <p>Management's Discussion and Analysis of Financial Condition and Results of
+         Operations is based upon the Company's consolidated financial statements,
+         which have been prepared in accordance with accounting principles.</p>
+    </body></html>
+    """
+    chunks = parse_filing(html, source_url="https://example.com/x.htm")
+    assert {c.section for c in chunks} == {"Item 1A. Risk Factors"}

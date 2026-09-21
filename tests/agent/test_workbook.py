@@ -12,15 +12,66 @@ def _chunk(chunk_id: str, text: str, source_url: str = "https://example.com/fili
     return Chunk(chunk_id=chunk_id, section="Item 7", text=text, source_url=source_url)
 
 
-def test_skips_ungrounded_commentary_entirely() -> None:
+def test_refusal_renders_an_explicit_row_never_a_silent_skip() -> None:
+    """Two production workbooks shipped with a Commentary tab holding only its
+    headers, because every refusal was skipped. An absent row is not a
+    fail-closed signal (CLAUDE.md rule 4) -- it is indistinguishable from a
+    sheet that was never written."""
     wb = Workbook()
     commentary = [Commentary(line_item_key="revenue", text=None, citations=[])]
-    write_commentary_sheet(wb, commentary, labels_by_key={"revenue": "Revenue"}, chunks_by_id={})
+    write_commentary_sheet(
+        wb,
+        commentary,
+        labels_by_key={"revenue": "Revenue"},
+        chunks_by_id={},
+        refusal_reasons={"revenue": "no filing passage was retrieved for this line item"},
+    )
 
     ws = wb["Commentary"]
-    values = [row for row in ws.iter_rows(values_only=True) if any(row)]
-    # Only the intro line and the header row -- no data row for the refusal.
-    assert len(values) == 2
+    data_rows = [row for row in ws.iter_rows(min_row=4, values_only=True) if any(row)]
+    assert len(data_rows) == 1
+    label, text, quote, source = data_rows[0]
+    assert label == "Revenue"
+    assert text == (
+        "no grounded commentary available: no filing passage was retrieved for this line item"
+    )
+    assert quote is None and source is None
+
+
+def test_refusal_without_a_recorded_reason_still_explains_itself() -> None:
+    wb = Workbook()
+    write_commentary_sheet(
+        wb,
+        [Commentary(line_item_key="revenue", text=None, citations=[])],
+        labels_by_key={"revenue": "Revenue"},
+        chunks_by_id={},
+    )
+    text = wb["Commentary"].cell(row=4, column=2).value
+    assert str(text).startswith("no grounded commentary available: ")
+
+
+def test_every_attempted_line_item_gets_a_row() -> None:
+    """The invariant the audit would have caught: rows >= attempted items."""
+    wb = Workbook()
+    keys = ["revenue", "gross_profit", "net_income"]
+    write_commentary_sheet(
+        wb,
+        [Commentary(line_item_key=k, text=None, citations=[]) for k in keys],
+        labels_by_key={k: k.title() for k in keys},
+        chunks_by_id={},
+        refusal_reasons={"gross_profit": "this filer does not report this line item"},
+    )
+    data_rows = [row for row in wb["Commentary"].iter_rows(min_row=4, values_only=True) if any(row)]
+    assert len(data_rows) == len(keys)
+    assert all("no grounded commentary available" in str(row[1]) for row in data_rows)
+
+
+def test_empty_commentary_says_narration_did_not_run() -> None:
+    wb = Workbook()
+    write_commentary_sheet(wb, [], labels_by_key={}, chunks_by_id={})
+    data_rows = [row for row in wb["Commentary"].iter_rows(min_row=4, values_only=True) if any(row)]
+    assert len(data_rows) == 1
+    assert "narration did not run" in str(data_rows[0][1])
 
 
 def test_writes_one_row_per_citation_with_source_resolved() -> None:

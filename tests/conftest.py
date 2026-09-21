@@ -69,6 +69,26 @@ def msft_submissions() -> dict[str, Any]:
 
 
 @pytest.fixture
+def mcd_facts() -> dict[str, Any]:
+    return _load("companyfacts_MCD.json")
+
+
+@pytest.fixture
+def mcd_submissions() -> dict[str, Any]:
+    return _load("submissions_MCD.json")
+
+
+@pytest.fixture
+def meta_facts() -> dict[str, Any]:
+    return _load("companyfacts_META.json")
+
+
+@pytest.fixture
+def meta_submissions() -> dict[str, Any]:
+    return _load("submissions_META.json")
+
+
+@pytest.fixture
 def fixture_company_tickers() -> dict[str, Any]:
     return _load("company_tickers.json")
 
@@ -81,6 +101,21 @@ def aapl_statements(aapl_facts: dict[str, Any], aapl_submissions: dict[str, Any]
 @pytest.fixture
 def msft_statements(msft_facts: dict[str, Any], msft_submissions: dict[str, Any]) -> StatementSet:
     return build_statements(msft_facts, msft_submissions, "MSFT")
+
+
+@pytest.fixture
+def mcd_statements(mcd_facts: dict[str, Any], mcd_submissions: dict[str, Any]) -> StatementSet:
+    """McDonald's: no `us-gaap:Liabilities`, no consolidated pretax, negative
+    equity in every presented year, and share counts filed in millions -- the
+    filer shape that produced the production workbook audit."""
+    return build_statements(mcd_facts, mcd_submissions, "MCD")
+
+
+@pytest.fixture
+def meta_statements(meta_facts: dict[str, Any], meta_submissions: dict[str, Any]) -> StatementSet:
+    """Meta: no gross profit, no inventory, and PP&E filed only under the
+    finance-lease-inclusive element."""
+    return build_statements(meta_facts, meta_submissions, "META")
 
 
 # --- Mocked EdgarClient fixtures ---------------------------------------------
