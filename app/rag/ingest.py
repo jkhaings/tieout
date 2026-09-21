@@ -45,6 +45,30 @@ def _heading_re(item: str, title_start: str) -> re.Pattern[str]:
     return re.compile(rf"item\s*{item}\.?:?\s*{title_start}", re.IGNORECASE)
 
 
+def _bare_heading_re(title: str) -> re.Pattern[str]:
+    """Build a regex matching a section heading that carries no "Item <n>." prefix.
+
+    Some filers label their sections only in the table of contents and head
+    the bodies with the bare title (McDonald's 10-K heads its sections
+    "RISK FACTORS" and "MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL
+    CONDITION AND RESULTS OF OPERATIONS", and the string "Item 1A" appears
+    exactly once in the whole document -- in the contents table). Matching
+    those needs a looser anchor than :func:`_heading_re`, so this one is
+    tightened in a different direction instead: the title must be the
+    *entire* line, which is what separates a heading from the many prose
+    sentences that open with the same words ("Management's Discussion and
+    Analysis of Financial Condition and Results of Operations is based upon
+    the Company's Consolidated Financial Statements...").
+
+    Args:
+        title: A regex fragment matching the section's full canonical title.
+
+    Returns:
+        A compiled, case-insensitive, line-anchored regex.
+    """
+    return re.compile(rf"^[ \t]*{title}[ \t]*$", re.IGNORECASE | re.MULTILINE)
+
+
 @dataclass(frozen=True)
 class _SectionSpec:
     """Where to look for one target section and how to tell it's over."""
@@ -53,6 +77,10 @@ class _SectionSpec:
     label: str  # human-readable section label stored on each Chunk
     heading_pattern: re.Pattern[str]
     boundary_patterns: tuple[re.Pattern[str], ...]
+    # Some filers label sections only in the contents table and head the
+    # bodies with the bare title; see `_extract_section`.
+    bare_heading_pattern: re.Pattern[str]
+    bare_boundary_patterns: tuple[re.Pattern[str], ...]
 
 
 _ITEM1A = _SectionSpec(
@@ -63,6 +91,11 @@ _ITEM1A = _SectionSpec(
         _heading_re("1b", r"unresolved\s+staff\s+comments"),
         _heading_re("2", r"properties"),
     ),
+    bare_heading_pattern=_bare_heading_re(r"risk\s+factors"),
+    bare_boundary_patterns=(
+        _bare_heading_re(r"unresolved\s+staff\s+comments"),
+        _bare_heading_re(r"properties"),
+    ),
 )
 
 _ITEM7 = _SectionSpec(
@@ -72,6 +105,14 @@ _ITEM7 = _SectionSpec(
     boundary_patterns=(
         _heading_re("7a", r"quantitative"),
         _heading_re("8", r"financial\s+statements"),
+    ),
+    bare_heading_pattern=_bare_heading_re(
+        r"management.?s?\s+discussion\s+and\s+analysis"
+        r"(?:\s+of\s+financial\s+condition\s+and\s+results\s+of\s+operations)?"
+    ),
+    bare_boundary_patterns=(
+        _bare_heading_re(r"quantitative\s+and\s+qualitative[^\n]*"),
+        _bare_heading_re(r"financial\s+statements\s+and\s+supplementary\s+data"),
     ),
 )
 
@@ -160,15 +201,26 @@ def _extract_section(text: str, spec: _SectionSpec) -> str | None:
         The extracted section text (heading through the boundary), or
         ``None`` if no candidate heading was found at all.
     """
-    candidates = [
-        m.start() for m in spec.heading_pattern.finditer(text) if _is_line_start(text, m.start())
-    ]
+    # Both heading shapes compete on equal footing, and the span scoring
+    # below picks between them. Adding the bare-title form cannot promote a
+    # contents-table line over a real body heading: the bare boundary titles
+    # come with it, so a contents-table candidate's span shrinks to the
+    # distance to the *next* contents line, which is what already made the
+    # item-prefixed form robust.
+    candidates = sorted(
+        {
+            m.start()
+            for pattern in (spec.heading_pattern, spec.bare_heading_pattern)
+            for m in pattern.finditer(text)
+            if _is_line_start(text, m.start())
+        }
+    )
     if not candidates:
         return None
     boundaries = sorted(
         {
             m.start()
-            for pattern in spec.boundary_patterns
+            for pattern in spec.boundary_patterns + spec.bare_boundary_patterns
             for m in pattern.finditer(text)
             if _is_line_start(text, m.start())
         }
