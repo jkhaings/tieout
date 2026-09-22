@@ -189,18 +189,56 @@ itself — the regression that would have caught both shipped workbooks.
 Regenerated: **MCD 10/10 line items present (3 narrated, 7 explicit refusals);
 META 10/10 (8 narrated, 2 refusals).**
 
-**Prod evidence: requested, not yet in hand.** This machine cannot reach the
-droplet — no SSH config, no `known_hosts` entry, no IP, and `docs/DEPLOY.md`
-names only the hostname. A diagnostic block (the `runs` rows for both tickers, an
-`ANTHROPIC_API_KEY` presence check on `/opt/tieout/.env`, and a `docker logs`
-grep) was handed over to be run by hand. Cause (a) is confirmed independently of
-it, because it reproduces locally. **META's** empty tab is *not* explained by
-anything in this repo — META narrates 8/10 locally on the same code — so its
-cause is prod-side: either an empty `ANTHROPIC_API_KEY` in `/opt/tieout/.env`, or
-a stale EDGAR cache (`docs/DEPLOY.md` records that the cache never expires). The
-run log tells them apart: `narrate_ok=0` with `narrate failed for` lines means a
-bad key, `narrate_ok=0` with no narration lines at all means an unset one. This
-section should be amended once that output exists.
+**Prod evidence, obtained after the fixes were pushed.** This machine cannot
+reach the droplet, so the run log and container logs were read by hand. They
+ruled out the obvious suspect and pointed at a second, independent cause:
+
+```
+KEY: set                       # ANTHROPIC_API_KEY present in /opt/tieout/.env
+narrate failed for   -> 0 hits # no API errors at all
+container created 02:07:24, 3645 log lines; both runs at 02:18 -> logs DO cover them
+META  done  02:18:53  acc=0001628280-26-003942  tieout=1 narrate=0
+MCD   done  02:18:08  acc=0000063908-26-000035  tieout=0 narrate=0
+AAPL  done  02:11:46  acc=0000320193-25-000079  tieout=1 narrate=1
+```
+
+So the key worked (AAPL narrated seven minutes earlier on the same key), no API
+call failed, and prod used the *same* accession numbers reproduced locally --
+which eliminates a stale `submissions` feed. The only remaining path is
+retrieval returning zero chunks, and in the code as shipped that path logged
+nothing at all, which is exactly why the empty tab was the only symptom.
+
+For MCD that is the bare-heading bug above, reproduced locally. **META had a
+second, unrelated cause: a bad cached filing HTML.** After `rm -f
+/opt/tieout/data/cache/*.html` and a genuine re-run, META went `narrate=0` ->
+`narrate=1` with no code change touching its parse (its chunk count was 95
+before and after the ingest fix). The likely explanation is the silently
+truncated cache entry described in Session D of `docs/BUILDLOG.md` -- written
+before that session's atomic-publish fix and then preserved indefinitely,
+because the EDGAR cache never expires or revalidates. That much is inference:
+deleting the file was the fix, so the evidence no longer exists to confirm it.
+The durable lesson is the interaction, not the individual bug -- a
+write-once-never-revalidated cache turns any historical corruption into a
+permanent one.
+
+**An operational trap worth naming.** The first invalidation attempt silently
+did nothing: `runs.db` stores `artifact_path` as the *container* path
+(`/app/data/runs/...`), while host-side tooling sees the bind mount at
+`/opt/tieout/data/runs/...`. Every `rm` "skipped", the old workbooks stayed on
+disk, and the next META request was served by `find_cached_run` as a cache hit
+that replayed the previous run's `narrate_ok=0` -- looking exactly like the
+redeploy had failed. Recorded in `docs/DEPLOY.md`.
+
+**Confirmed in production**, after redeploy on the pushed commits:
+
+```
+MCD   done  2026-09-22 04:00:51  tieout=1  narrate=1   (was tieout=0 narrate=0)
+META  done  2026-09-22 04:03:51  tieout=1  narrate=1   (was tieout=1 narrate=0)
+```
+
+with the new diagnostic greps (`narration skipped`, `parse_filing found no
+sections`, `no filing text available`, `retrieve failed`, `narrate failed`)
+returning nothing -- clean runs, not degraded ones.
 
 ### 4. MCD had zero balance-sheet checks in all five years
 

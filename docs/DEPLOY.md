@@ -129,6 +129,18 @@ restart keeps whatever key the container was created with.
   no cron for this yet.
 - **Per-IP rate-limit buckets are in-memory** and reset on every container
   restart; the daily run cap is in `runs.db` and does not.
+- **`runs.db` stores container paths, not host paths.** `artifact_path` is
+  written as `/app/data/runs/<id>/model.xlsx`; on the host that same file is
+  at `/opt/tieout/data/runs/<id>/model.xlsx`. Any host-side script that reads
+  the column must translate, or it silently no-ops.
+- **Invalidate cached workbooks before verifying a fix.** Runs are cached by
+  (ticker, filing) and `find_cached_run` returns the stored record whenever
+  the artifact file still exists — replaying the old `tieout_passed` /
+  `narrate_ok`. After a deploy meant to change a given ticker's output, delete
+  that ticker's `model.xlsx` files first (translating the path, above) or the
+  next request is served from cache and the redeploy looks like it did
+  nothing. Clearing `data/cache/*.html` too forces the filing text to be
+  re-fetched, which is the remedy when a cache entry itself is the problem.
 - **Use `docker stop`, not `docker kill`.** A SIGKILL strands any in-flight
   run at `status="running"` forever — nothing reconciles it at startup. A
   graceful stop lets the pipeline's own cancellation handler mark it
